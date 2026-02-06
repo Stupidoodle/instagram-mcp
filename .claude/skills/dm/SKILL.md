@@ -20,6 +20,7 @@ allowed-tools:
   - mcp__instagram__reply_to_thread
   - mcp__instagram__send_and_check
   - mcp__instagram__get_messages
+  - mcp__instagram__get_chat_log
   - mcp__instagram__delete_message
   - mcp__instagram__wait_for_reply
   - mcp__instagram__send_photo
