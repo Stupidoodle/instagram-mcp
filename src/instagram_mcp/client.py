@@ -15,6 +15,7 @@ from instagrapi import Client
 from instagrapi.exceptions import (
     BadPassword,
     ChallengeRequired,
+    ClientUnauthorizedError,
     LoginRequired,
     TwoFactorRequired,
 )
@@ -392,8 +393,23 @@ class InstagramClient:
             session_file: Path to store/load session data.
         """
         self.client = Client()
+        # Override default challenge_code_handler which calls input() —
+        # that would corrupt JSON-RPC on the MCP server's stdio transport.
+        self.client.challenge_code_handler = self._challenge_code_handler
         self.session_file = session_file or Path(".instagram_session")
         self._logged_in = False
+
+    @staticmethod
+    def _challenge_code_handler(username: str, choice: Any = None) -> str:
+        """No-op challenge handler that prevents stdin reads.
+
+        The default instagrapi handler calls input() which blocks and corrupts
+        the MCP server's JSON-RPC stdio transport. This raises immediately.
+        """
+        raise ChallengeRequired(
+            f"Challenge required for {username} (method: {choice}). "
+            "Run 'instagram-mcp-login' to resolve interactively."
+        )
 
     @property
     def is_logged_in(self) -> bool:
@@ -431,6 +447,16 @@ class InstagramClient:
         except LoginRequired as e:
             logger.warning("Session expired, need to re-login")
             raise SessionError("Session expired") from e
+        except (ChallengeRequired, ClientUnauthorizedError) as e:
+            logger.warning(
+                "Session challenged/unauthorized by Instagram, deleting stale session"
+            )
+            self.session_file.unlink(missing_ok=True)
+            raise SessionError(
+                "Session challenged by Instagram. Stale session deleted. "
+                "Resolve any 'Was this you?' prompts in the Instagram app, "
+                "then run 'instagram-mcp-login' to re-authenticate."
+            ) from e
 
     def save_session(self) -> None:
         """Save current session to file.
@@ -472,17 +498,34 @@ class InstagramClient:
         except TwoFactorRequired as e:
             if verification_code_handler:
                 code = verification_code_handler()
-                # Pass verification_code to login method directly
-                self.client.login(username, password, verification_code=code)
-                self._logged_in = True
-                self.save_session()
+                try:
+                    self.client.login(username, password, verification_code=code)
+                    self._logged_in = True
+                    self.save_session()
+                except ChallengeRequired as ce:
+                    # Auth succeeded but login_flow() got challenged (e.g. get_reels_tray_feed).
+                    # Try saving the session anyway — the auth token may still be valid.
+                    try:
+                        self.save_session()
+                        logger.warning(
+                            "Challenge during login_flow() after 2FA — session saved, "
+                            "but may need app confirmation"
+                        )
+                    except SessionError:
+                        pass
+                    raise AuthenticationError(
+                        "Login succeeded but Instagram challenged a post-login request. "
+                        "Check your Instagram app for 'Was this you?' prompts, approve it, "
+                        "then try again. Session was saved and may work on next startup."
+                    ) from ce
             else:
                 raise AuthenticationError(
                     "2FA required. Run 'instagram-mcp-login' to authenticate interactively."
                 ) from e
         except ChallengeRequired as e:
             raise AuthenticationError(
-                f"Challenge required: {e}. Please login via Instagram app first."
+                f"Challenge required: {e}. Check your Instagram app for 'Was this you?' "
+                "prompts, approve it, wait a minute, then try again."
             ) from e
 
     def login_or_load_session(self, username: str, password: str) -> None:
@@ -808,8 +851,8 @@ class InstagramClient:
 def interactive_login() -> None:
     """Interactive login command for initial authentication.
 
-    This function handles 2FA interactively via stdin/stdout and saves
-    the session for later use by the MCP server.
+    This function handles 2FA and challenge codes interactively via
+    stdin/stdout and saves the session for later use by the MCP server.
     """
     from instagram_mcp.config import get_settings, setup_logging
 
@@ -817,6 +860,14 @@ def interactive_login() -> None:
     setup_logging(settings.log_level)
 
     client = InstagramClient(session_file=settings.instagram_session_file)
+
+    # Delete stale session to avoid ChallengeRequired from old session data
+    if settings.instagram_session_file.exists():
+        print(
+            f"Removing old session file: {settings.instagram_session_file}",
+            file=sys.stderr,
+        )
+        settings.instagram_session_file.unlink()
 
     print("Instagram MCP - Interactive Login", file=sys.stderr)
     print("=" * 40, file=sys.stderr)
@@ -827,6 +878,23 @@ def interactive_login() -> None:
         sys.stderr.flush()
         return input().strip()
 
+    def get_challenge_code(username: str, choice: Any = None) -> str:
+        """Prompt for Instagram challenge code via stdin."""
+        print(
+            f"\nChallenge required for {username}!",
+            file=sys.stderr,
+        )
+        print(
+            f"Instagram sent a security code via {choice or 'email/SMS'}.",
+            file=sys.stderr,
+        )
+        print("Enter challenge code: ", end="", file=sys.stderr)
+        sys.stderr.flush()
+        return input().strip()
+
+    # Override challenge handler for interactive use
+    client.client.challenge_code_handler = get_challenge_code
+
     try:
         client.login(
             username=settings.instagram_username,
@@ -834,11 +902,11 @@ def interactive_login() -> None:
             verification_code_handler=get_2fa_code,
         )
         print(
-            f"Login successful! Session saved to {settings.instagram_session_file}",
+            f"\nLogin successful! Session saved to {settings.instagram_session_file}",
             file=sys.stderr,
         )
     except AuthenticationError as e:
-        print(f"Login failed: {e}", file=sys.stderr)
+        print(f"\nLogin failed: {e}", file=sys.stderr)
         sys.exit(1)
 
 
