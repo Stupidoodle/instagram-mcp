@@ -568,3 +568,77 @@ class TestInteractiveLogin:
         assert exc_info.value.code == 1
 
 
+class TestRetryOnRateLimit:
+    """Tests for _retry_on_rate_limit exponential backoff."""
+
+    def test_retries_on_467_then_succeeds(self, instagram_client: InstagramClient) -> None:
+        """Test that 467 errors trigger retry and eventual success."""
+        mock_thread = MagicMock()
+        mock_thread.users = []
+        mock_thread.messages = []
+        mock_thread.last_seen_at = None
+
+        instagram_client.client.direct_thread.side_effect = [
+            Exception("467 Client Error: - for url: https://..."),
+            Exception("467 Client Error: - for url: https://..."),
+            mock_thread,
+        ]
+
+        with patch("instagram_mcp.client.time.sleep") as mock_sleep:
+            messages = instagram_client.get_messages("123456789", amount=5)
+
+        assert messages == []
+        assert instagram_client.client.direct_thread.call_count == 3
+        # Backoff: 1s, 2s
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(1)
+        mock_sleep.assert_any_call(2)
+
+    def test_backoff_caps_at_30_seconds(self, instagram_client: InstagramClient) -> None:
+        """Test that backoff delay is capped at 30 seconds."""
+        mock_thread = MagicMock()
+        mock_thread.users = []
+        mock_thread.messages = []
+        mock_thread.last_seen_at = None
+
+        # 7 failures: delays = 1, 2, 4, 8, 16, 30, 30 then success
+        instagram_client.client.direct_thread.side_effect = [
+            *[Exception("467 Client Error") for _ in range(7)],
+            mock_thread,
+        ]
+
+        with patch("instagram_mcp.client.time.sleep") as mock_sleep:
+            instagram_client.get_messages("123456789", amount=5)
+
+        assert mock_sleep.call_count == 7
+        delays = [call.args[0] for call in mock_sleep.call_args_list]
+        assert delays == [1, 2, 4, 8, 16, 30, 30]
+
+    def test_non_rate_limit_errors_raise_immediately(
+        self, instagram_client: InstagramClient
+    ) -> None:
+        """Test that non-467/429 errors are not retried."""
+        instagram_client.client.direct_thread.side_effect = Exception("Connection refused")
+
+        with pytest.raises(Exception, match="Connection refused"):
+            instagram_client.get_messages("123456789", amount=5)
+
+        assert instagram_client.client.direct_thread.call_count == 1
+
+    def test_retries_on_429(self, instagram_client: InstagramClient) -> None:
+        """Test that HTTP 429 also triggers retry."""
+        mock_thread = MagicMock()
+        mock_thread.users = []
+        mock_thread.messages = []
+        mock_thread.last_seen_at = None
+
+        instagram_client.client.direct_thread.side_effect = [
+            Exception("429 Too Many Requests"),
+            mock_thread,
+        ]
+
+        with patch("instagram_mcp.client.time.sleep"):
+            messages = instagram_client.get_messages("123456789", amount=5)
+
+        assert messages == []
+        assert instagram_client.client.direct_thread.call_count == 2

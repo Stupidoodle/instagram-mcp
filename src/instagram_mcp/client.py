@@ -7,6 +7,7 @@ session persistence and proper error handling for MCP server usage.
 import json
 import logging
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -411,6 +412,31 @@ class InstagramClient:
             "Run 'instagram-mcp-login' to resolve interactively."
         )
 
+    def _retry_on_rate_limit(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
+        """Execute operation with exponential backoff on rate limit errors.
+
+        Retries infinitely with delay doubling each attempt, capped at 30 seconds.
+        Catches HTTP 467 (Instagram-specific) and 429 (standard) rate limit errors.
+        """
+        max_delay = 30.0
+        attempt = 0
+        while True:
+            try:
+                return operation(*args, **kwargs)
+            except Exception as e:
+                error_str = str(e)
+                if "467" not in error_str and "429" not in error_str:
+                    raise
+                attempt += 1
+                backoff = min(2 ** (attempt - 1), max_delay)
+                logger.warning(
+                    "Rate limited, retry in %.0fs (attempt %d): %s",
+                    backoff,
+                    attempt,
+                    e,
+                )
+                time.sleep(backoff)
+
     @property
     def is_logged_in(self) -> bool:
         """Check if the client is logged in.
@@ -569,7 +595,9 @@ class InstagramClient:
         Returns:
             DirectThread: Thread model with messages.
         """
-        thread = self.client.direct_thread(thread_id=int(thread_id), amount=amount)
+        thread = self._retry_on_rate_limit(
+            self.client.direct_thread, thread_id=int(thread_id), amount=amount
+        )
         viewer_id = str(self.client.user_id) if self.client.user_id else None
         return _convert_thread(thread, include_messages=True, viewer_id=viewer_id)
 
@@ -708,7 +736,9 @@ class InstagramClient:
             list[DirectMessage]: List of message models.
         """
         # Fetch thread to get user info for sender lookup and seen status
-        thread = self.client.direct_thread(thread_id=int(thread_id), amount=amount)
+        thread = self._retry_on_rate_limit(
+            self.client.direct_thread, thread_id=int(thread_id), amount=amount
+        )
         users = [_convert_user(user) for user in thread.users] if thread.users else []
         users_by_id = {u.user_id: u for u in users}
         last_seen_at = getattr(thread, "last_seen_at", None)
