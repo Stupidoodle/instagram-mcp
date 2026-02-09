@@ -45,9 +45,7 @@ class ThreadUser(BaseModel):
     user_id: str = Field(..., description="Instagram user ID")
     username: str = Field(..., description="Instagram username")
     full_name: str = Field(default="", description="User's display name")
-    profile_pic_url: str | None = Field(
-        default=None, description="URL to profile picture"
-    )
+    profile_pic_url: str | None = Field(default=None, description="URL to profile picture")
     is_verified: bool = Field(default=False, description="Whether user is verified")
 
 
@@ -82,9 +80,7 @@ class DirectMessage(BaseModel):
     sender: ThreadUser = Field(..., description="Message sender")
     content: MessageContent = Field(..., description="Message content")
     timestamp: datetime = Field(..., description="Message timestamp")
-    is_sent_by_viewer: bool = Field(
-        default=False, description="Whether sent by authenticated user"
-    )
+    is_sent_by_viewer: bool = Field(default=False, description="Whether sent by authenticated user")
     seen_since: int | None = Field(
         default=None,
         description="Minutes since recipient saw this message (null if not seen yet)",
@@ -109,13 +105,9 @@ class DirectThread(BaseModel):
     thread_id: str = Field(..., description="Unique thread ID")
     thread_title: str = Field(default="", description="Thread title")
     users: list[ThreadUser] = Field(default_factory=list, description="Thread users")
-    last_activity_at: datetime | None = Field(
-        default=None, description="Last activity timestamp"
-    )
+    last_activity_at: datetime | None = Field(default=None, description="Last activity timestamp")
     is_group: bool = Field(default=False, description="Whether this is a group thread")
     is_muted: bool = Field(default=False, description="Whether thread is muted")
     unread: bool = Field(default=False, description="Whether there are unread messages")
     message_count: int = Field(default=0, description="Number of messages")
-    messages: list[DirectMessage] = Field(
-        default_factory=list, description="Messages in thread"
-    )
+    messages: list[DirectMessage] = Field(default_factory=list, description="Messages in thread")

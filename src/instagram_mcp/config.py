@@ -41,6 +41,10 @@ class Settings(BaseSettings):
         default=Path(".instagram_session"),
         description="Path to session file for persistence",
     )
+    instagram_app_version: str = Field(
+        default="415.0.0.36.76",
+        description="Instagram app version to emulate (bump when Instagram blocks old versions)",
+    )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO",
         description="Logging level",
@@ -77,9 +81,7 @@ def setup_logging(level: str = "INFO") -> logging.Logger:
     if not logger.handlers:
         handler = logging.StreamHandler()
         handler.setLevel(getattr(logging, level))
-        formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        )
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         handler.setFormatter(formatter)
         logger.addHandler(handler)
 

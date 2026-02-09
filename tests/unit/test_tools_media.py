@@ -24,9 +24,7 @@ class TestMediaTools:
                 return tool.fn
         return None
 
-    def test_send_photo_success(
-        self, sample_message: DirectMessage, tmp_path: Path
-    ) -> None:
+    def test_send_photo_success(self, sample_message: DirectMessage, tmp_path: Path) -> None:
         self.mock_client.send_photo.return_value = sample_message
         photo_path = tmp_path / "test.jpg"
         photo_path.touch()
@@ -88,9 +86,7 @@ class TestMediaTools:
         assert "error" in result
         assert "API Error" in result["error"]
 
-    def test_send_video_success(
-        self, sample_message: DirectMessage, tmp_path: Path
-    ) -> None:
+    def test_send_video_success(self, sample_message: DirectMessage, tmp_path: Path) -> None:
         self.mock_client.send_video.return_value = sample_message
         video_path = tmp_path / "test.mp4"
         video_path.touch()

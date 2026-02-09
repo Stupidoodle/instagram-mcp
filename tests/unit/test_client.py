@@ -131,9 +131,7 @@ class TestConvertMessage:
         assert msg.sender.user_id == "0"
         assert msg.sender.username == "unknown"
 
-    def test_convert_message_is_sent_by_viewer_none(
-        self, mock_ig_message: MagicMock
-    ) -> None:
+    def test_convert_message_is_sent_by_viewer_none(self, mock_ig_message: MagicMock) -> None:
         mock_ig_message.is_sent_by_viewer = None
 
         msg = _convert_message(mock_ig_message, "123456789")
@@ -224,9 +222,7 @@ class TestInstagramClient:
 
         assert result is False
 
-    def test_load_session_success(
-        self, tmp_path: Path, mock_instagrapi_client: MagicMock
-    ) -> None:
+    def test_load_session_success(self, tmp_path: Path, mock_instagrapi_client: MagicMock) -> None:
         session_file = tmp_path / "session"
         session_data = {"authorization_data": {"sessionid": "test_session"}}
         session_file.write_text(json.dumps(session_data))
@@ -248,9 +244,7 @@ class TestInstagramClient:
         with pytest.raises(SessionError, match="Invalid session file format"):
             client.load_session()
 
-    def test_save_session(
-        self, tmp_path: Path, mock_instagrapi_client: MagicMock
-    ) -> None:
+    def test_save_session(self, tmp_path: Path, mock_instagrapi_client: MagicMock) -> None:
         session_file = tmp_path / "session"
 
         with patch("instagram_mcp.client.Client", return_value=mock_instagrapi_client):
@@ -261,9 +255,7 @@ class TestInstagramClient:
         # Check file permissions are restrictive
         assert (session_file.stat().st_mode & 0o777) == 0o600
 
-    def test_login_success(
-        self, tmp_path: Path, mock_instagrapi_client: MagicMock
-    ) -> None:
+    def test_login_success(self, tmp_path: Path, mock_instagrapi_client: MagicMock) -> None:
         with patch("instagram_mcp.client.Client", return_value=mock_instagrapi_client):
             client = InstagramClient(session_file=tmp_path / "session")
             client.login("test_user", "test_pass")
@@ -271,9 +263,7 @@ class TestInstagramClient:
         assert client.is_logged_in is True
         mock_instagrapi_client.login.assert_called_once_with("test_user", "test_pass")
 
-    def test_login_bad_password(
-        self, tmp_path: Path, mock_instagrapi_client: MagicMock
-    ) -> None:
+    def test_login_bad_password(self, tmp_path: Path, mock_instagrapi_client: MagicMock) -> None:
         mock_instagrapi_client.login.side_effect = BadPassword()
 
         with patch("instagram_mcp.client.Client", return_value=mock_instagrapi_client):
@@ -343,6 +333,85 @@ class TestInstagramClient:
         mock_instagrapi_client.login.assert_called_once()
 
 
+class TestAppVersion:
+    """Tests for Instagram app version management."""
+
+    def test_init_with_app_version(self, tmp_path: Path) -> None:
+        """Test that passing app_version applies it on init."""
+        mock_client = MagicMock()
+        mock_client.get_settings.return_value = {
+            "device_settings": {"app_version": "269.0.0.18.75"},
+            "user_agent": "Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; 6T Dev; devitron; qcom; en_US; 314665256)",
+        }
+        with patch("instagram_mcp.client.Client", return_value=mock_client):
+            client = InstagramClient(
+                session_file=tmp_path / "session",
+                app_version="415.0.0.36.76",
+            )
+
+        assert client._app_version == "415.0.0.36.76"
+        # set_settings should have been called with the updated version
+        call_args = mock_client.set_settings.call_args[0][0]
+        assert call_args["device_settings"]["app_version"] == "415.0.0.36.76"
+        assert "415.0.0.36.76" in call_args["user_agent"]
+        assert "269.0.0.18.75" not in call_args["user_agent"]
+
+    def test_init_without_app_version(self, tmp_path: Path) -> None:
+        """Test that omitting app_version leaves client defaults alone."""
+        mock_client = MagicMock()
+        with patch("instagram_mcp.client.Client", return_value=mock_client):
+            client = InstagramClient(session_file=tmp_path / "session")
+
+        assert client._app_version is None
+        # get_settings should NOT be called for version patching
+        mock_client.get_settings.assert_not_called()
+
+    def test_load_session_applies_version(
+        self, tmp_path: Path, mock_instagrapi_client: MagicMock
+    ) -> None:
+        """Test that loading a session with old version gets patched."""
+        session_file = tmp_path / "session"
+        session_data = {"authorization_data": {"sessionid": "test_session"}}
+        session_file.write_text(json.dumps(session_data))
+
+        mock_instagrapi_client.get_settings.return_value = {
+            "device_settings": {"app_version": "269.0.0.18.75"},
+            "user_agent": "Instagram 269.0.0.18.75 Android (...)",
+        }
+
+        with patch("instagram_mcp.client.Client", return_value=mock_instagrapi_client):
+            client = InstagramClient(
+                session_file=session_file,
+                app_version="415.0.0.36.76",
+            )
+            client.load_session()
+
+        # set_settings called during load_session to patch version
+        calls = mock_instagrapi_client.set_settings.call_args_list
+        # Find the call that has the new version (may be init or load_session)
+        patched = any(
+            c[0][0].get("device_settings", {}).get("app_version") == "415.0.0.36.76" for c in calls
+        )
+        assert patched
+
+    def test_apply_app_version_noop_when_same(self, tmp_path: Path) -> None:
+        """Test that _apply_app_version is a no-op when version matches."""
+        mock_client = MagicMock()
+        mock_client.get_settings.return_value = {
+            "device_settings": {"app_version": "415.0.0.36.76"},
+            "user_agent": "Instagram 415.0.0.36.76 Android (...)",
+        }
+        with patch("instagram_mcp.client.Client", return_value=mock_client):
+            client = InstagramClient(
+                session_file=tmp_path / "session",
+                app_version="415.0.0.36.76",
+            )
+
+        # get_settings called once (in _apply_app_version), but set_settings NOT called
+        # because version already matches
+        mock_client.set_settings.assert_not_called()
+
+
 class TestInstagramClientThreadOperations:
     def test_get_threads(
         self, instagram_client: InstagramClient, mock_ig_thread: MagicMock
@@ -355,9 +424,7 @@ class TestInstagramClientThreadOperations:
         assert threads[0].thread_id == "123456789"
         instagram_client.client.direct_threads.assert_called_once_with(amount=10)
 
-    def test_get_thread(
-        self, instagram_client: InstagramClient, mock_ig_thread: MagicMock
-    ) -> None:
+    def test_get_thread(self, instagram_client: InstagramClient, mock_ig_thread: MagicMock) -> None:
         instagram_client.client.direct_thread.return_value = mock_ig_thread
 
         thread = instagram_client.get_thread("123456789", amount=20)
@@ -530,9 +597,7 @@ class TestInstagramClientMediaOperations:
     def test_share_profile(self, instagram_client: InstagramClient) -> None:
         instagram_client.client.direct_profile_share.return_value = True
 
-        result = instagram_client.share_profile(
-            "444444444", target_user_ids=["123"]
-        )
+        result = instagram_client.share_profile("444444444", target_user_ids=["123"])
 
         assert result is True
         instagram_client.client.direct_profile_share.assert_called_once()

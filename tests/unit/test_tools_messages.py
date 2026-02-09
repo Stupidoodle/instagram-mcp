@@ -202,9 +202,7 @@ class TestWaitForReplyTool:
 
     @patch("instagram_mcp.tools.messages.time.sleep")
     @patch("instagram_mcp.tools.messages.time.time")
-    def test_wait_for_reply_success(
-        self, mock_time: MagicMock, mock_sleep: MagicMock
-    ) -> None:
+    def test_wait_for_reply_success(self, mock_time: MagicMock, mock_sleep: MagicMock) -> None:
         """Test successful detection of new reply."""
         # Use a counter for time.time() - sync phase + main loop needs many calls
         time_values = iter([0, 0, 0, 3, 6, 6, 17, 17])
@@ -212,13 +210,11 @@ class TestWaitForReplyTool:
 
         # Our baseline message (timestamp T0)
         baseline_msg = self._create_message(
-            "100", "Hello", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "Hello", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         # Their new message (timestamp > T0)
         new_msg = self._create_message(
-            "101", "Hey there!", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101", "Hey there!", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 1, 0)
         )
 
         self.mock_client.get_messages.side_effect = [
@@ -239,30 +235,25 @@ class TestWaitForReplyTool:
         )
 
         assert result["success"] is True
-        assert result["message_count"] == 1
+        assert len(result["new_messages"]) == 1
         assert result["new_messages"][0]["text"] == "Hey there!"
         assert result["new_messages"][0]["sender"] == "other_user"
 
     @patch("instagram_mcp.tools.messages.time.sleep")
     @patch("instagram_mcp.tools.messages.time.time")
-    def test_wait_for_reply_double_text(
-        self, mock_time: MagicMock, mock_sleep: MagicMock
-    ) -> None:
+    def test_wait_for_reply_double_text(self, mock_time: MagicMock, mock_sleep: MagicMock) -> None:
         """Test catching double texts within grace period."""
         time_values = iter([0, 0, 0, 3, 3, 8, 8, 15, 15])
         mock_time.side_effect = lambda: next(time_values)
 
         baseline_msg = self._create_message(
-            "100", "Hello", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "Hello", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         msg1 = self._create_message(
-            "101", "Hey!", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101", "Hey!", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 1, 0)
         )
         msg2 = self._create_message(
-            "102", "Also...", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 2, 0)
+            "102", "Also...", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 2, 0)
         )
 
         self.mock_client.get_messages.side_effect = [
@@ -281,7 +272,7 @@ class TestWaitForReplyTool:
         )
 
         assert result["success"] is True
-        assert result["message_count"] == 2
+        assert len(result["new_messages"]) == 2
         # Should be in chronological order (oldest first)
         assert result["new_messages"][0]["text"] == "Hey!"
         assert result["new_messages"][1]["text"] == "Also..."
@@ -297,8 +288,7 @@ class TestWaitForReplyTool:
         mock_time.side_effect = lambda: next(time_values)
 
         baseline_msg = self._create_message(
-            "100", "Hello", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "Hello", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         self.mock_client.get_messages.return_value = [baseline_msg]
 
@@ -315,16 +305,13 @@ class TestWaitForReplyTool:
 
     @patch("instagram_mcp.tools.messages.time.sleep")
     @patch("instagram_mcp.tools.messages.time.time")
-    def test_wait_for_reply_long_timeout(
-        self, mock_time: MagicMock, mock_sleep: MagicMock
-    ) -> None:
+    def test_wait_for_reply_long_timeout(self, mock_time: MagicMock, mock_sleep: MagicMock) -> None:
         """Test long timeout behavior (e.g., 120 minutes cooldown)."""
         time_values = iter([0, 0, 0, 3600, 7201])
         mock_time.side_effect = lambda: next(time_values)
 
         baseline_msg = self._create_message(
-            "100", "Hello", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "Hello", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         self.mock_client.get_messages.return_value = [baseline_msg]
 
@@ -350,18 +337,18 @@ class TestWaitForReplyTool:
         mock_time.side_effect = lambda: next(time_values)
 
         baseline_msg = self._create_message(
-            "100", "Hello", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "Hello", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         # Our follow-up has timestamp > baseline, but should be ignored (is_sent_by_viewer)
         our_msg = self._create_message(
-            "101", "Anyone there?", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101",
+            "Anyone there?",
+            is_sent_by_viewer=True,
+            timestamp=datetime(2024, 1, 15, 10, 1, 0),
         )
         # Their reply has timestamp > baseline, should be detected
         their_msg = self._create_message(
-            "102", "Yeah!", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 2, 0)
+            "102", "Yeah!", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 2, 0)
         )
 
         self.mock_client.get_messages.side_effect = [
@@ -380,7 +367,7 @@ class TestWaitForReplyTool:
         )
 
         assert result["success"] is True
-        assert result["message_count"] == 1
+        assert len(result["new_messages"]) == 1
         assert result["new_messages"][0]["text"] == "Yeah!"
 
     def test_wait_for_reply_error(self) -> None:
@@ -483,18 +470,18 @@ class TestWaitForReplyTool:
 
         # Their first message at T0
         their_first_msg = self._create_message(
-            "100", "Hey!", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "Hey!", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         # Our response at T1 (this becomes our baseline)
         our_response = self._create_message(
-            "101", "Hi there!", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101", "Hi there!", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 1, 0)
         )
         # Their message at T2 > T1 (should be detected!)
         their_race_msg = self._create_message(
-            "102", "Also wanted to ask...", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 2, 0)
+            "102",
+            "Also wanted to ask...",
+            is_sent_by_viewer=False,
+            timestamp=datetime(2024, 1, 15, 10, 2, 0),
         )
 
         # When wait_for_reply is called, the thread already has all 3 messages
@@ -514,7 +501,7 @@ class TestWaitForReplyTool:
 
         # Should detect msg 102 because its timestamp (T2) > our baseline (T1)
         assert result.get("success") is True, f"Expected success, got: {result}"
-        assert result["message_count"] == 1
+        assert len(result["new_messages"]) == 1
         assert result["new_messages"][0]["text"] == "Also wanted to ask..."
 
 
@@ -557,13 +544,11 @@ class TestSendAndCheckTool:
         """Test send_and_check when no interjection occurs."""
         # Setup: their last message before we send
         their_old_msg = self._create_message(
-            "100", "hey", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "hey", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         # Our sent message
         our_sent_msg = self._create_message(
-            "101", "what's up", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101", "what's up", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 1, 0)
         )
 
         # Mock reply_to_thread to return our message
@@ -582,35 +567,37 @@ class TestSendAndCheckTool:
         result = tool_fn(thread_id="123456789", text="what's up")
 
         assert result["success"] is True
-        assert result["message_id"] == "101"
         assert result["has_interjection"] is False
         assert "interjection" not in result
-        assert result["synced"] is True
 
     @patch("instagram_mcp.tools.messages.time.sleep")
     def test_send_and_check_with_interjection(self, mock_sleep: MagicMock) -> None:
         """Test send_and_check detects interjection from them."""
         # Their old message (baseline)
         their_old_msg = self._create_message(
-            "100", "hey", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "hey", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         # Our sent message
         our_sent_msg = self._create_message(
-            "101", "what's up", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101", "what's up", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 1, 0)
         )
         # Their interjection (sent AFTER our message)
         their_interjection = self._create_message(
-            "102", "wait hold on", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 1, 5)
+            "102",
+            "wait hold on",
+            is_sent_by_viewer=False,
+            timestamp=datetime(2024, 1, 15, 10, 1, 5),
         )
 
         self.mock_client.reply_to_thread.return_value = our_sent_msg
 
         self.mock_client.get_messages.side_effect = [
             [their_old_msg],  # Pre-send baseline
-            [their_interjection, our_sent_msg, their_old_msg],  # Sync - our msg + their interjection
+            [
+                their_interjection,
+                our_sent_msg,
+                their_old_msg,
+            ],  # Sync - our msg + their interjection
             [their_interjection, our_sent_msg, their_old_msg],  # Post-send check
         ]
 
@@ -626,12 +613,10 @@ class TestSendAndCheckTool:
     def test_send_and_check_sync_timeout(self, mock_sleep: MagicMock) -> None:
         """Test send_and_check handles sync timeout gracefully."""
         their_old_msg = self._create_message(
-            "100", "hey", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "hey", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         our_sent_msg = self._create_message(
-            "101", "what's up", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101", "what's up", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 1, 0)
         )
 
         self.mock_client.reply_to_thread.return_value = our_sent_msg
@@ -646,9 +631,8 @@ class TestSendAndCheckTool:
             sync_timeout_seconds=1,  # Short timeout for test
         )
 
-        # Should still succeed but synced=False
+        # Should still succeed even if sync timed out
         assert result["success"] is True
-        assert result["synced"] is False
 
     def test_send_and_check_send_failure(self) -> None:
         """Test send_and_check handles send failure."""
@@ -713,13 +697,15 @@ class TestGetChatLogTool:
         """Test basic chat log output."""
         messages = [
             self._create_message(
-                "102", "not much",
+                "102",
+                "not much",
                 is_sent_by_viewer=False,
                 username="lena",
                 timestamp=datetime(2024, 1, 15, 10, 31, 0),
             ),
             self._create_message(
-                "101", "hey whats up",
+                "101",
+                "hey whats up",
                 is_sent_by_viewer=True,
                 username="you",
                 timestamp=datetime(2024, 1, 15, 10, 30, 0),
@@ -743,12 +729,14 @@ class TestGetChatLogTool:
         """Test that action_log messages are filtered out."""
         messages = [
             self._create_message(
-                "102", "thread updated",
+                "102",
+                "thread updated",
                 media_type=MediaType.ACTION_LOG,
                 timestamp=datetime(2024, 1, 15, 10, 31, 0),
             ),
             self._create_message(
-                "101", "hey",
+                "101",
+                "hey",
                 is_sent_by_viewer=True,
                 username="you",
                 timestamp=datetime(2024, 1, 15, 10, 30, 0),
@@ -766,7 +754,8 @@ class TestGetChatLogTool:
         """Test that non-text media shows as [type] markers."""
         messages = [
             self._create_message(
-                "101", None,
+                "101",
+                None,
                 is_sent_by_viewer=False,
                 username="lena",
                 media_type=MediaType.PHOTO,
@@ -784,7 +773,8 @@ class TestGetChatLogTool:
         """Test seen_since annotation on last viewer message."""
         messages = [
             self._create_message(
-                "101", "good night",
+                "101",
+                "good night",
                 is_sent_by_viewer=True,
                 username="you",
                 timestamp=datetime(2024, 1, 15, 23, 0, 0),
@@ -802,13 +792,19 @@ class TestGetChatLogTool:
         """Test offset pagination."""
         messages = [
             self._create_message(
-                "103", "msg3", timestamp=datetime(2024, 1, 15, 10, 32, 0),
+                "103",
+                "msg3",
+                timestamp=datetime(2024, 1, 15, 10, 32, 0),
             ),
             self._create_message(
-                "102", "msg2", timestamp=datetime(2024, 1, 15, 10, 31, 0),
+                "102",
+                "msg2",
+                timestamp=datetime(2024, 1, 15, 10, 31, 0),
             ),
             self._create_message(
-                "101", "msg1", timestamp=datetime(2024, 1, 15, 10, 30, 0),
+                "101",
+                "msg1",
+                timestamp=datetime(2024, 1, 15, 10, 30, 0),
             ),
         ]
         self.mock_client.get_messages.return_value = messages
@@ -872,9 +868,7 @@ class TestGetMessagesOffset:
         assert result["messages"][0]["text"] == "msg2"
         assert result["messages"][1]["text"] == "msg3"
         # Client should be called with offset + amount
-        self.mock_client.get_messages.assert_called_once_with(
-            thread_id="123456789", amount=4
-        )
+        self.mock_client.get_messages.assert_called_once_with(thread_id="123456789", amount=4)
 
     def test_has_more_true(self) -> None:
         """Test has_more is true when more messages exist."""
@@ -948,3 +942,395 @@ class TestGetMessagesOffset:
         # Their message should NOT have seen_since
         their_result = result["messages"][0]
         assert "seen_since" not in their_result
+
+
+class TestWaitForReplyMQTT:
+    """Tests for the MQTT fast path of wait_for_reply."""
+
+    def _make_mqtt(self, connected: bool = True) -> MagicMock:
+        """Create a mock MQTTManager."""
+        from instagram_mcp.mqtt.router import EventRouter
+
+        mqtt = MagicMock()
+        mqtt.is_connected = connected
+        mqtt.router = EventRouter()
+        return mqtt
+
+    def test_message_event_returned(self) -> None:
+        """MQTT path returns MessageEvent as new_messages."""
+        import threading
+
+        from instagram_mcp.mqtt.events import MessageEvent
+        from instagram_mcp.tools.messages import _wait_for_reply_mqtt
+
+        mqtt = self._make_mqtt()
+        event = MessageEvent(
+            thread_id="T1", item_id="I1", user_id=42, text="yo", item_type="text", timestamp=1000
+        )
+
+        def deliver() -> None:
+            import time
+
+            time.sleep(0.05)
+            mqtt.router.deliver(event)
+
+        t = threading.Thread(target=deliver)
+        t.start()
+        result = _wait_for_reply_mqtt(
+            mqtt, "T1", timeout_minutes=1, double_text_grace_period_seconds=1
+        )
+        t.join()
+
+        assert result["success"] is True
+        assert len(result["new_messages"]) == 1
+        assert result["new_messages"][0]["sender"] == "42"
+        assert result["new_messages"][0]["text"] == "yo"
+
+    def test_timeout_returns_timeout(self) -> None:
+        """MQTT path returns timeout when no events arrive."""
+        from instagram_mcp.tools.messages import _wait_for_reply_mqtt
+
+        mqtt = self._make_mqtt()
+        # Use a very short timeout to avoid slow test
+        result = _wait_for_reply_mqtt(
+            mqtt, "T1", timeout_minutes=0, double_text_grace_period_seconds=1
+        )
+
+        assert result["timeout"] is True
+
+    def test_seen_event_enriches_result(self) -> None:
+        """SeenEvent during wait is included as metadata."""
+        import threading
+
+        from instagram_mcp.mqtt.events import MessageEvent, SeenEvent
+        from instagram_mcp.tools.messages import _wait_for_reply_mqtt
+
+        mqtt = self._make_mqtt()
+        seen = SeenEvent(thread_id="T1", user_id=99, item_id="I1", timestamp=2_000_000)
+        msg = MessageEvent(
+            thread_id="T1", item_id="I2", user_id=99, text="hi", item_type="text", timestamp=3000
+        )
+
+        def deliver() -> None:
+            import time
+
+            time.sleep(0.03)
+            mqtt.router.deliver(seen)
+            time.sleep(0.03)
+            mqtt.router.deliver(msg)
+
+        t = threading.Thread(target=deliver)
+        t.start()
+        result = _wait_for_reply_mqtt(
+            mqtt, "T1", timeout_minutes=1, double_text_grace_period_seconds=1
+        )
+        t.join()
+
+        assert result["success"] is True
+        assert result.get("seen") is True
+
+    def test_typing_event_enriches_result(self) -> None:
+        """TypingEvent during wait sets typing flag."""
+        import threading
+
+        from instagram_mcp.mqtt.events import MessageEvent, TypingEvent
+        from instagram_mcp.tools.messages import _wait_for_reply_mqtt
+
+        mqtt = self._make_mqtt()
+        typing = TypingEvent(thread_id="T1", user_id=99, activity_status=1, ttl=5000)
+        msg = MessageEvent(
+            thread_id="T1", item_id="I1", user_id=99, text="hey", item_type="text", timestamp=1000
+        )
+
+        def deliver() -> None:
+            import time
+
+            time.sleep(0.03)
+            mqtt.router.deliver(typing)
+            time.sleep(0.03)
+            mqtt.router.deliver(msg)
+
+        t = threading.Thread(target=deliver)
+        t.start()
+        result = _wait_for_reply_mqtt(
+            mqtt, "T1", timeout_minutes=1, double_text_grace_period_seconds=1
+        )
+        t.join()
+
+        assert result["success"] is True
+        assert result.get("typing") is True
+
+    def test_reaction_event_enriches_result(self) -> None:
+        """ReactionEvent during wait is included as metadata."""
+        import threading
+
+        from instagram_mcp.mqtt.events import MessageEvent, ReactionEvent
+        from instagram_mcp.tools.messages import _wait_for_reply_mqtt
+
+        mqtt = self._make_mqtt()
+        reaction = ReactionEvent(
+            thread_id="T1", item_id="I0", user_id=99, reaction_type="like", emoji="\u2764\ufe0f"
+        )
+        msg = MessageEvent(
+            thread_id="T1", item_id="I1", user_id=99, text="nice", item_type="text", timestamp=1000
+        )
+
+        def deliver() -> None:
+            import time
+
+            time.sleep(0.03)
+            mqtt.router.deliver(reaction)
+            time.sleep(0.03)
+            mqtt.router.deliver(msg)
+
+        t = threading.Thread(target=deliver)
+        t.start()
+        result = _wait_for_reply_mqtt(
+            mqtt, "T1", timeout_minutes=1, double_text_grace_period_seconds=1
+        )
+        t.join()
+
+        assert result["success"] is True
+        assert "reactions" in result
+        assert result["reactions"][0]["emoji"] == "\u2764\ufe0f"
+
+    def test_unsend_event_enriches_result(self) -> None:
+        """UnsendEvent during wait is included as unsent item_id list."""
+        import threading
+
+        from instagram_mcp.mqtt.events import MessageEvent, UnsendEvent
+        from instagram_mcp.tools.messages import _wait_for_reply_mqtt
+
+        mqtt = self._make_mqtt()
+        unsend = UnsendEvent(thread_id="T1", item_id="I0", user_id=99)
+        msg = MessageEvent(
+            thread_id="T1", item_id="I1", user_id=99, text="nvm", item_type="text", timestamp=1000
+        )
+
+        def deliver() -> None:
+            import time
+
+            time.sleep(0.03)
+            mqtt.router.deliver(unsend)
+            time.sleep(0.03)
+            mqtt.router.deliver(msg)
+
+        t = threading.Thread(target=deliver)
+        t.start()
+        result = _wait_for_reply_mqtt(
+            mqtt, "T1", timeout_minutes=1, double_text_grace_period_seconds=1
+        )
+        t.join()
+
+        assert result["success"] is True
+        assert "unsent" in result
+        assert result["unsent"][0] == "I0"
+
+    def test_seen_on_timeout_with_disconnect(self) -> None:
+        """Seen events are returned even when no messages arrive (timeout via disconnect)."""
+        import threading
+
+        from instagram_mcp.mqtt.events import SeenEvent
+        from instagram_mcp.tools.messages import _wait_for_reply_mqtt
+
+        mqtt = self._make_mqtt()
+        seen = SeenEvent(thread_id="T1", user_id=99, item_id="I1", timestamp=1_000_000)
+
+        def deliver_and_disconnect() -> None:
+            import time
+
+            time.sleep(0.03)
+            mqtt.router.deliver(seen)
+            time.sleep(0.05)
+            mqtt.is_connected = False  # Triggers early exit
+
+        t = threading.Thread(target=deliver_and_disconnect)
+        t.start()
+        result = _wait_for_reply_mqtt(
+            mqtt, "T1", timeout_minutes=1, double_text_grace_period_seconds=1
+        )
+        t.join()
+
+        assert result["timeout"] is True
+        assert result.get("seen") is True
+
+    def test_disconnected_returns_early(self) -> None:
+        """MQTT path returns early when connection is lost."""
+        from instagram_mcp.tools.messages import _wait_for_reply_mqtt
+
+        mqtt = self._make_mqtt(connected=False)
+        result = _wait_for_reply_mqtt(
+            mqtt, "T1", timeout_minutes=1, double_text_grace_period_seconds=1
+        )
+
+        assert result["timeout"] is True
+
+
+class TestSendAndCheckMQTT:
+    """Tests for the MQTT fast path of send_and_check."""
+
+    def _make_mqtt(self, connected: bool = True) -> MagicMock:
+        """Create a mock MQTTManager."""
+        from instagram_mcp.mqtt.router import EventRouter
+
+        mqtt = MagicMock()
+        mqtt.is_connected = connected
+        mqtt.router = EventRouter()
+        return mqtt
+
+    def test_no_interjection(self) -> None:
+        """MQTT path returns no interjection when no events arrive."""
+        from instagram_mcp.tools.messages import _send_and_check_mqtt
+
+        mqtt = self._make_mqtt()
+        q = mqtt.router.subscribe("T1")
+        result = _send_and_check_mqtt(mqtt, q, "T1", "M1")
+
+        assert result["success"] is True
+        assert result["has_interjection"] is False
+        assert "interjection" not in result
+
+    def test_interjection_detected(self) -> None:
+        """MQTT path detects a message interjection."""
+        import threading
+
+        from instagram_mcp.mqtt.events import MessageEvent
+        from instagram_mcp.tools.messages import _send_and_check_mqtt
+
+        mqtt = self._make_mqtt()
+        q = mqtt.router.subscribe("T1")
+        interjection = MessageEvent(
+            thread_id="T1", item_id="I1", user_id=42, text="wait", item_type="text", timestamp=1000
+        )
+
+        def deliver() -> None:
+            import time
+
+            time.sleep(0.03)
+            mqtt.router.deliver(interjection)
+
+        t = threading.Thread(target=deliver)
+        t.start()
+        result = _send_and_check_mqtt(mqtt, q, "T1", "M1")
+        t.join()
+
+        assert result["has_interjection"] is True
+        assert result["interjection"]["text"] == "wait"
+        assert result["interjection"]["sender"] == "42"
+
+    def test_interjection_with_username(self) -> None:
+        """MQTT path resolves user_id to username via user_map."""
+        import threading
+
+        from instagram_mcp.mqtt.events import MessageEvent
+        from instagram_mcp.tools.messages import _send_and_check_mqtt
+
+        mqtt = self._make_mqtt()
+        q = mqtt.router.subscribe("T1")
+        interjection = MessageEvent(
+            thread_id="T1", item_id="I1", user_id=42, text="wait", item_type="text", timestamp=1000
+        )
+
+        def deliver() -> None:
+            import time
+
+            time.sleep(0.03)
+            mqtt.router.deliver(interjection)
+
+        t = threading.Thread(target=deliver)
+        t.start()
+        result = _send_and_check_mqtt(
+            mqtt, q, "T1", "M1", user_map={"42": "shaina"}
+        )
+        t.join()
+
+        assert result["interjection"]["sender"] == "shaina"
+
+    def test_self_echo_filtered(self) -> None:
+        """MQTT path ignores self-echoes (own message pushed back by MQTT)."""
+        import threading
+
+        from instagram_mcp.mqtt.events import MessageEvent
+        from instagram_mcp.tools.messages import _send_and_check_mqtt
+
+        mqtt = self._make_mqtt()
+        q = mqtt.router.subscribe("T1")
+        self_echo = MessageEvent(
+            thread_id="T1", item_id="I1", user_id=999, text="my msg", item_type="text", timestamp=1000
+        )
+
+        def deliver() -> None:
+            import time
+
+            time.sleep(0.03)
+            mqtt.router.deliver(self_echo)
+
+        t = threading.Thread(target=deliver)
+        t.start()
+        result = _send_and_check_mqtt(
+            mqtt, q, "T1", "M1", self_user_id="999"
+        )
+        t.join()
+
+        assert result["has_interjection"] is False
+
+    def test_seen_event_enriches(self) -> None:
+        """SeenEvent during sync window is included as metadata."""
+        import threading
+
+        from instagram_mcp.mqtt.events import SeenEvent
+        from instagram_mcp.tools.messages import _send_and_check_mqtt
+
+        mqtt = self._make_mqtt()
+        q = mqtt.router.subscribe("T1")
+        seen = SeenEvent(thread_id="T1", user_id=99, item_id="I1", timestamp=2_000_000)
+
+        def deliver() -> None:
+            import time
+
+            time.sleep(0.03)
+            mqtt.router.deliver(seen)
+
+        t = threading.Thread(target=deliver)
+        t.start()
+        result = _send_and_check_mqtt(mqtt, q, "T1", "M1")
+        t.join()
+
+        assert result["has_interjection"] is False
+        assert result.get("seen") is True
+
+    def test_typing_event_enriches(self) -> None:
+        """TypingEvent during sync window sets typing flag."""
+        import threading
+
+        from instagram_mcp.mqtt.events import TypingEvent
+        from instagram_mcp.tools.messages import _send_and_check_mqtt
+
+        mqtt = self._make_mqtt()
+        q = mqtt.router.subscribe("T1")
+        typing = TypingEvent(thread_id="T1", user_id=99, activity_status=1, ttl=5000)
+
+        def deliver() -> None:
+            import time
+
+            time.sleep(0.03)
+            mqtt.router.deliver(typing)
+
+        t = threading.Thread(target=deliver)
+        t.start()
+        result = _send_and_check_mqtt(mqtt, q, "T1", "M1")
+        t.join()
+
+        assert result.get("typing") is True
+
+    def test_reaction_event_enriches(self) -> None:
+        """ReactionEvent during sync window — not captured in trimmed MQTT path."""
+        from instagram_mcp.tools.messages import _send_and_check_mqtt
+
+        mqtt = self._make_mqtt()
+        q = mqtt.router.subscribe("T1")
+        # Reactions are no longer tracked in the trimmed MQTT send_and_check
+        result = _send_and_check_mqtt(mqtt, q, "T1", "M1")
+
+        assert result["success"] is True
+        assert result["has_interjection"] is False

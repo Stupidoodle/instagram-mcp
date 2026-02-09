@@ -7,6 +7,7 @@ session persistence and proper error handling for MCP server usage.
 import json
 import logging
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -41,6 +42,7 @@ def _fix_instagrapi_extractors() -> None:
     Fixes:
     1. visual_media.expiring_media_action_summary.timestamp not converted from microseconds
     2. action_log.description not extracted to text field for action_log messages
+    3. extract_broadcast_channel crashes on missing pinned_channels_info
 
     This replaces the extractors entirely with fixed versions.
     """
@@ -53,8 +55,34 @@ def _fix_instagrapi_extractors() -> None:
         extract_media_v1,
         extract_media_v1_xma,
     )
+    from instagrapi.types import Broadcast, User
     from instagrapi.types import DirectMessage as IGDirectMessage
     from instagrapi.types import ReplyMessage
+
+    def fixed_extract_broadcast_channel(data: dict[str, Any]) -> list:
+        """Fixed version that handles missing pinned_channels_info."""
+        try:
+            channels = data["pinned_channels_info"]["pinned_channels_list"]
+            return [Broadcast(**channel) for channel in channels]
+        except (KeyError, TypeError):
+            return []
+
+    def fixed_extract_user_v1(data: dict[str, Any]) -> Any:
+        """Fixed version that provides defaults for missing required fields."""
+        data["broadcast_channel"] = fixed_extract_broadcast_channel(data)
+        data["external_url"] = data.get("external_url") or None
+        versions = data.get("hd_profile_pic_versions")
+        pic_hd = versions[-1] if versions else data.get("hd_profile_pic_url_info", {})
+        data["profile_pic_url_hd"] = pic_hd.get("url") if pic_hd else None
+        # Instagram API sometimes omits required fields — provide defaults
+        data.setdefault("full_name", data.get("username", ""))
+        data.setdefault("is_private", False)
+        data.setdefault("is_verified", False)
+        data.setdefault("media_count", 0)
+        data.setdefault("follower_count", 0)
+        data.setdefault("following_count", 0)
+        data.setdefault("is_business", False)
+        return User(**data)
 
     def fixed_extract_reply_message(data: dict[str, Any]) -> ReplyMessage:
         """Fixed version that converts all timestamp fields."""
@@ -135,9 +163,7 @@ def _fix_instagrapi_extractors() -> None:
             media = visual_media["media"]
             emas = media.get("expiring_media_action_summary")
             if emas and emas.get("timestamp"):
-                emas["timestamp"] = dt.datetime.fromtimestamp(
-                    int(emas["timestamp"]) // 1_000_000
-                )
+                emas["timestamp"] = dt.datetime.fromtimestamp(int(emas["timestamp"]) // 1_000_000)
             # Convert image candidates URL expiration timestamps
             img_versions = media.get("image_versions2")
             if img_versions:
@@ -159,9 +185,7 @@ def _fix_instagrapi_extractors() -> None:
         if visual_media:
             emas = visual_media.get("expiring_media_action_summary")
             if emas and emas.get("timestamp"):
-                emas["timestamp"] = dt.datetime.fromtimestamp(
-                    int(emas["timestamp"]) // 1_000_000
-                )
+                emas["timestamp"] = dt.datetime.fromtimestamp(int(emas["timestamp"]) // 1_000_000)
 
         # FIX: Extract action_log description to text field
         action_log = data.get("action_log")
@@ -173,8 +197,15 @@ def _fix_instagrapi_extractors() -> None:
         return IGDirectMessage(**data)
 
     # Replace the broken extractors
+    extractors.extract_broadcast_channel = fixed_extract_broadcast_channel
+    extractors.extract_user_v1 = fixed_extract_user_v1
     extractors.extract_reply_message = fixed_extract_reply_message
     extractors.extract_direct_message = fixed_extract_direct_message
+
+    # Also patch modules that imported the functions directly (local binding)
+    from instagrapi.mixins import user as user_mixin
+
+    user_mixin.extract_user_v1 = fixed_extract_user_v1
     logger.debug("Replaced instagrapi extractors with fixed versions")
 
 
@@ -387,11 +418,18 @@ class InstagramClient:
         session_file: Path to the session file for persistence.
     """
 
-    def __init__(self, session_file: Path | None = None) -> None:
+    def __init__(
+        self,
+        session_file: Path | None = None,
+        app_version: str | None = None,
+    ) -> None:
         """Initialize the Instagram client.
 
         Args:
             session_file: Path to store/load session data.
+            app_version: Instagram app version to emulate. When set, overrides
+                the version in both fresh clients and loaded sessions. This
+                prevents Instagram's ``unsupported_version`` challenge block.
         """
         self.client = Client()
         # Override default challenge_code_handler which calls input() —
@@ -399,6 +437,10 @@ class InstagramClient:
         self.client.challenge_code_handler = self._challenge_code_handler
         self.session_file = session_file or Path(".instagram_session")
         self._logged_in = False
+        self._app_version = app_version
+        self._lock = threading.RLock()
+        if app_version:
+            self._apply_app_version(app_version)
 
     @staticmethod
     def _challenge_code_handler(username: str, choice: Any = None) -> str:
@@ -412,6 +454,26 @@ class InstagramClient:
             "Run 'instagram-mcp-login' to resolve interactively."
         )
 
+    def _apply_app_version(self, version: str) -> None:
+        """Patch the instagrapi client to emulate a specific Instagram app version.
+
+        Updates device_settings.app_version and the User-Agent string to match,
+        preventing Instagram's ``unsupported_version`` challenge block.
+        """
+        settings = self.client.get_settings()
+        old_version = settings.get("device_settings", {}).get("app_version", "")
+        if old_version == version:
+            return
+
+        settings.setdefault("device_settings", {})["app_version"] = version
+
+        old_ua = settings.get("user_agent", "")
+        if old_version and old_version in old_ua:
+            settings["user_agent"] = old_ua.replace(old_version, version)
+
+        self.client.set_settings(settings)
+        logger.info("App version updated: %s -> %s", old_version, version)
+
     def _retry_on_rate_limit(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
         """Execute operation with exponential backoff on rate limit errors.
 
@@ -422,7 +484,8 @@ class InstagramClient:
         attempt = 0
         while True:
             try:
-                return operation(*args, **kwargs)
+                with self._lock:
+                    return operation(*args, **kwargs)
             except Exception as e:
                 error_str = str(e)
                 if "467" not in error_str and "429" not in error_str:
@@ -462,6 +525,8 @@ class InstagramClient:
         try:
             session_data = json.loads(self.session_file.read_text())
             self.client.set_settings(session_data)
+            if self._app_version:
+                self._apply_app_version(self._app_version)
             auth_data = session_data.get("authorization_data", {})
             session_id = auth_data.get("sessionid", "")
             self.client.login_by_sessionid(session_id)
@@ -474,9 +539,7 @@ class InstagramClient:
             logger.warning("Session expired, need to re-login")
             raise SessionError("Session expired") from e
         except (ChallengeRequired, ClientUnauthorizedError) as e:
-            logger.warning(
-                "Session challenged/unauthorized by Instagram, deleting stale session"
-            )
+            logger.warning("Session challenged/unauthorized by Instagram, deleting stale session")
             self.session_file.unlink(missing_ok=True)
             raise SessionError(
                 "Session challenged by Instagram. Stale session deleted. "
@@ -582,7 +645,8 @@ class InstagramClient:
         Returns:
             list[DirectThread]: List of thread models.
         """
-        threads = self.client.direct_threads(amount=amount)
+        with self._lock:
+            threads = self.client.direct_threads(amount=amount)
         return [_convert_thread(t) for t in threads]
 
     def get_thread(self, thread_id: str, amount: int = 20) -> DirectThread:
@@ -607,7 +671,8 @@ class InstagramClient:
         Returns:
             list[DirectThread]: List of pending thread models.
         """
-        threads = self.client.direct_pending_inbox()
+        with self._lock:
+            threads = self.client.direct_pending_inbox()
         return [_convert_thread(t) for t in threads]
 
     def search_threads(self, query: str) -> list[DirectThread]:
@@ -622,7 +687,8 @@ class InstagramClient:
             list[DirectThread]: List of matching thread models.
         """
         query_lower = query.lower()
-        all_threads = self.client.direct_threads(amount=50)
+        with self._lock:
+            all_threads = self.client.direct_threads(amount=50)
         matching = []
         for t in all_threads:
             # Check thread title
@@ -645,7 +711,8 @@ class InstagramClient:
         Returns:
             bool: True if successful.
         """
-        return bool(self.client.direct_thread_hide(thread_id=int(thread_id)))
+        with self._lock:
+            return bool(self.client.direct_thread_hide(thread_id=int(thread_id)))
 
     def mark_thread_unread(self, thread_id: str) -> bool:
         """Mark a thread as unread.
@@ -656,7 +723,8 @@ class InstagramClient:
         Returns:
             bool: True if successful.
         """
-        return bool(self.client.direct_thread_mark_unread(thread_id=int(thread_id)))
+        with self._lock:
+            return bool(self.client.direct_thread_mark_unread(thread_id=int(thread_id)))
 
     def mute_thread(self, thread_id: str) -> bool:
         """Mute notifications for a thread.
@@ -667,7 +735,8 @@ class InstagramClient:
         Returns:
             bool: True if successful.
         """
-        return bool(self.client.direct_thread_mute(thread_id=int(thread_id)))
+        with self._lock:
+            return bool(self.client.direct_thread_mute(thread_id=int(thread_id)))
 
     def unmute_thread(self, thread_id: str) -> bool:
         """Unmute notifications for a thread.
@@ -678,7 +747,8 @@ class InstagramClient:
         Returns:
             bool: True if successful.
         """
-        return bool(self.client.direct_thread_unmute(thread_id=int(thread_id)))
+        with self._lock:
+            return bool(self.client.direct_thread_unmute(thread_id=int(thread_id)))
 
     # Message operations
     def send_message(
@@ -700,11 +770,12 @@ class InstagramClient:
         user_ids_int = [int(uid) for uid in user_ids] if user_ids else None
         thread_ids_int = [int(tid) for tid in thread_ids] if thread_ids else None
 
-        result = self.client.direct_send(
-            text=text,
-            user_ids=user_ids_int,
-            thread_ids=thread_ids_int,
-        )
+        with self._lock:
+            result = self.client.direct_send(
+                text=text,
+                user_ids=user_ids_int,
+                thread_ids=thread_ids_int,
+            )
         if result:
             tid = str(result.thread_id) if hasattr(result, "thread_id") else ""
             return _convert_message(result, tid)
@@ -720,7 +791,8 @@ class InstagramClient:
         Returns:
             DirectMessage: The sent message, or None if failed.
         """
-        result = self.client.direct_answer(thread_id=int(thread_id), text=text)
+        with self._lock:
+            result = self.client.direct_answer(thread_id=int(thread_id), text=text)
         if result:
             return _convert_message(result, thread_id)
         return None
@@ -750,6 +822,34 @@ class InstagramClient:
             for msg in messages
         ]
 
+    def get_seq_id(self) -> int:
+        """Get the Iris sequence ID for MQTT subscription.
+
+        Returns:
+            The current seq_id from Instagram's direct_v2/inbox/ endpoint.
+        """
+        result = self._retry_on_rate_limit(
+            self.client.private_request, "direct_v2/inbox/", params={"limit": "1"}
+        )
+        return int(result.get("seq_id", 0))
+
+    def get_iris_info(self) -> dict:
+        """Get Iris subscription info from the inbox endpoint.
+
+        Returns:
+            Dict with 'seq_id', 'snapshot_at_ms', and 'app_version'.
+        """
+        result = self._retry_on_rate_limit(
+            self.client.private_request, "direct_v2/inbox/", params={"limit": "1"}
+        )
+        return {
+            "seq_id": int(result.get("seq_id", 0)),
+            "snapshot_at_ms": int(result.get("snapshot_at_ms", 0)),
+            "app_version": self.client.settings.get("device_settings", {}).get(
+                "app_version", "415.0.0.36.76"
+            ),
+        }
+
     def delete_message(self, thread_id: str, message_id: str) -> bool:
         """Delete a message from a thread.
 
@@ -760,9 +860,12 @@ class InstagramClient:
         Returns:
             bool: True if successful.
         """
-        return bool(
-            self.client.direct_message_delete(thread_id=int(thread_id), message_id=int(message_id))
-        )
+        with self._lock:
+            return bool(
+                self.client.direct_message_delete(
+                    thread_id=int(thread_id), message_id=int(message_id)
+                )
+            )
 
     # Media operations
     def send_photo(
@@ -784,11 +887,12 @@ class InstagramClient:
         user_ids_int = [int(uid) for uid in user_ids] if user_ids else None
         thread_ids_int = [int(tid) for tid in thread_ids] if thread_ids else None
 
-        result = self.client.direct_send_photo(
-            path=path,
-            user_ids=user_ids_int,
-            thread_ids=thread_ids_int,
-        )
+        with self._lock:
+            result = self.client.direct_send_photo(
+                path=path,
+                user_ids=user_ids_int,
+                thread_ids=thread_ids_int,
+            )
         if result:
             tid = str(result.thread_id) if hasattr(result, "thread_id") else ""
             return _convert_message(result, tid)
@@ -813,11 +917,12 @@ class InstagramClient:
         user_ids_int = [int(uid) for uid in user_ids] if user_ids else None
         thread_ids_int = [int(tid) for tid in thread_ids] if thread_ids else None
 
-        result = self.client.direct_send_video(
-            path=path,
-            user_ids=user_ids_int,
-            thread_ids=thread_ids_int,
-        )
+        with self._lock:
+            result = self.client.direct_send_video(
+                path=path,
+                user_ids=user_ids_int,
+                thread_ids=thread_ids_int,
+            )
         if result:
             tid = str(result.thread_id) if hasattr(result, "thread_id") else ""
             return _convert_message(result, tid)
@@ -842,13 +947,14 @@ class InstagramClient:
         user_ids_int = [int(uid) for uid in user_ids] if user_ids else []
         thread_ids_int = [int(tid) for tid in thread_ids] if thread_ids else None
 
-        return bool(
-            self.client.direct_media_share(
-                media_id=media_id,
-                user_ids=user_ids_int,
-                thread_ids=thread_ids_int,
+        with self._lock:
+            return bool(
+                self.client.direct_media_share(
+                    media_id=media_id,
+                    user_ids=user_ids_int,
+                    thread_ids=thread_ids_int,
+                )
             )
-        )
 
     def share_profile(
         self,
@@ -869,13 +975,14 @@ class InstagramClient:
         target_ids_int = [int(uid) for uid in target_user_ids] if target_user_ids else []
         thread_ids_int = [int(tid) for tid in thread_ids] if thread_ids else None
 
-        return bool(
-            self.client.direct_profile_share(
-                user_id=int(user_id),
-                user_ids=target_ids_int,
-                thread_ids=thread_ids_int,
+        with self._lock:
+            return bool(
+                self.client.direct_profile_share(
+                    user_id=int(user_id),
+                    user_ids=target_ids_int,
+                    thread_ids=thread_ids_int,
+                )
             )
-        )
 
 
 def interactive_login() -> None:
@@ -889,7 +996,10 @@ def interactive_login() -> None:
     settings = get_settings()
     setup_logging(settings.log_level)
 
-    client = InstagramClient(session_file=settings.instagram_session_file)
+    client = InstagramClient(
+        session_file=settings.instagram_session_file,
+        app_version=settings.instagram_app_version,
+    )
 
     # Delete stale session to avoid ChallengeRequired from old session data
     if settings.instagram_session_file.exists():
@@ -900,6 +1010,7 @@ def interactive_login() -> None:
         settings.instagram_session_file.unlink()
 
     print("Instagram MCP - Interactive Login", file=sys.stderr)
+    print(f"App version: {settings.instagram_app_version}", file=sys.stderr)
     print("=" * 40, file=sys.stderr)
 
     def get_2fa_code() -> str:
