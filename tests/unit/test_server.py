@@ -130,32 +130,14 @@ class TestMain:
     def test_main_success(self, mock_settings: MagicMock) -> None:
         with (
             patch("instagram_mcp.server.create_server") as mock_create,
-            patch("instagram_mcp.server.get_settings", return_value=mock_settings),
-            patch("sys.argv", ["instagram-mcp"]),
         ):
             mock_mcp = MagicMock()
             mock_create.return_value = mock_mcp
 
             main()
 
+            mock_create.assert_called_once()
             mock_mcp.run.assert_called_once_with(transport="stdio")
-
-    def test_main_http_transport(self, mock_settings: MagicMock) -> None:
-        with (
-            patch("instagram_mcp.server.create_server") as mock_create,
-            patch("instagram_mcp.server._run_http_server") as mock_run_http,
-            patch("instagram_mcp.server.get_settings", return_value=mock_settings),
-            patch(
-                "sys.argv", ["instagram-mcp", "--transport", "streamable-http", "--port", "9000"]
-            ),
-        ):
-            mock_mcp = MagicMock()
-            mock_create.return_value = mock_mcp
-
-            main()
-
-            mock_create.assert_called_once_with(host="127.0.0.1", port=9000)
-            mock_run_http.assert_called_once_with(mock_mcp, "127.0.0.1", 9000)
 
     def test_main_auth_error(self, mock_settings: MagicMock) -> None:
         with (
@@ -163,7 +145,6 @@ class TestMain:
                 "instagram_mcp.server.create_server",
                 side_effect=AuthenticationError("Failed"),
             ),
-            patch("sys.argv", ["instagram-mcp"]),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -176,7 +157,6 @@ class TestMain:
                 "instagram_mcp.server.create_server",
                 side_effect=SessionError("Failed"),
             ),
-            patch("sys.argv", ["instagram-mcp"]),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()
@@ -189,7 +169,6 @@ class TestMain:
                 "instagram_mcp.server.create_server",
                 side_effect=KeyboardInterrupt(),
             ),
-            patch("sys.argv", ["instagram-mcp"]),
             pytest.raises(SystemExit) as exc_info,
         ):
             main()

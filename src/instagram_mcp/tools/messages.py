@@ -1,16 +1,25 @@
 """Message operation tools for Instagram MCP Server.
 
 This module provides MCP tools for sending, receiving, and managing
-Instagram Direct Messages.
+Instagram Direct Messages. Requires MQTT for wait_for_reply and
+send_and_check — fails fast if MQTT is not connected.
 """
 
 from __future__ import annotations
 
 import logging
+import queue as queue_mod
 import time
 from typing import TYPE_CHECKING, Any
 
 from instagram_mcp.models.schemas import MediaType
+from instagram_mcp.mqtt.events import (
+    MessageEvent,
+    ReactionEvent,
+    SeenEvent,
+    TypingEvent,
+    UnsendEvent,
+)
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
@@ -27,9 +36,16 @@ def _get_mqtt_manager() -> Any:
     return get_mqtt_manager()
 
 
-def _effective_timeout_seconds(timeout_minutes: int) -> int:
-    """Return the effective wait budget in seconds."""
-    return timeout_minutes * 60
+def _require_mqtt() -> Any:
+    """Get MQTT manager, auto-reconnect if dead, or raise."""
+    mqtt = _get_mqtt_manager()
+    if not mqtt:
+        msg = "MQTT not initialized. Restart the MCP server."
+        raise RuntimeError(msg)
+    if not mqtt.ensure_connected():
+        msg = "MQTT not connected and reconnect failed. Restart the MCP server."
+        raise RuntimeError(msg)
+    return mqtt
 
 
 # Cache: thread_id → {user_id_str: username}
@@ -60,36 +76,27 @@ def _wait_for_reply_mqtt(  # noqa: PLR0912
     self_user_id: str = "",
     user_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """MQTT fast path for wait_for_reply. Zero REST calls.
+    """Wait for a reply via MQTT push. Zero REST calls.
 
     Collects ALL event types during the wait — messages, typing indicators,
     read receipts, reactions, unsends — and returns them as rich metadata
-    alongside the messages.  Filters out self-echoes (own messages pushed
-    back by Instagram MQTT).
+    alongside the messages.  Filters out self-echoes (own messages and read
+    receipts pushed back by Instagram MQTT).
     """
     _umap = user_map or {}
-    import queue as queue_mod
-
-    from instagram_mcp.mqtt.events import (
-        MessageEvent,
-        ReactionEvent,
-        SeenEvent,
-        TypingEvent,
-        UnsendEvent,
-    )
 
     start_time = time.time()
-    timeout_seconds = _effective_timeout_seconds(timeout_minutes)
+    timeout_seconds = timeout_minutes * 60
     deadline = start_time + timeout_seconds
+    reconnects_at_start = mqtt.reconnect_count
 
     logger.info(
-        "wait_for_reply MQTT: subscribing to thread %s (budget=%ds, mqtt_alive=%s)",
+        "wait_for_reply: thread %s (budget=%ds, reconnects_so_far=%d)",
         thread_id,
         timeout_seconds,
-        mqtt.is_connected,
+        reconnects_at_start,
     )
 
-    # Subscribe to ALL events for this thread
     q = mqtt.router.subscribe(thread_id)
 
     messages: list[MessageEvent] = []
@@ -97,6 +104,7 @@ def _wait_for_reply_mqtt(  # noqa: PLR0912
     typing_events: list[TypingEvent] = []
     reactions: list[ReactionEvent] = []
     unsends: list[UnsendEvent] = []
+    mid_wait_reconnects = 0
     first_message_time: float | None = None
 
     try:
@@ -105,7 +113,6 @@ def _wait_for_reply_mqtt(  # noqa: PLR0912
             if remaining <= 0:
                 break
 
-            # If we have messages and grace period expired, we're done
             if (
                 first_message_time is not None
                 and time.time() - first_message_time >= double_text_grace_period_seconds
@@ -116,13 +123,29 @@ def _wait_for_reply_mqtt(  # noqa: PLR0912
                 event = q.get(timeout=min(remaining, 0.5))
             except queue_mod.Empty:
                 if not mqtt.is_connected:
+                    elapsed = int(time.time() - start_time)
+                    logger.warning(
+                        "MQTT disconnected during wait (elapsed=%ds), reconnecting...",
+                        elapsed,
+                    )
+                    mqtt.router.unsubscribe(thread_id, q)
+                    if mqtt.ensure_connected():
+                        mid_wait_reconnects += 1
+                        logger.info(
+                            "MQTT reconnected mid-wait (#%d), re-subscribing",
+                            mid_wait_reconnects,
+                        )
+                        q = mqtt.router.subscribe(thread_id)
+                        continue
+                    logger.warning("MQTT reconnect failed, aborting wait")
+                    q = None  # Already unsubscribed
                     break
                 continue
 
-            # Collect by event type (skip self-echoes)
+            # Skip all self-echoes
             if isinstance(event, MessageEvent):
                 if self_user_id and str(event.user_id) == self_user_id:
-                    continue  # own message echoed back by MQTT
+                    continue
                 messages.append(event)
                 if first_message_time is None:
                     first_message_time = time.time()
@@ -131,17 +154,23 @@ def _wait_for_reply_mqtt(  # noqa: PLR0912
                         double_text_grace_period_seconds,
                     )
             elif isinstance(event, SeenEvent):
+                if self_user_id and str(event.user_id) == self_user_id:
+                    continue
                 seen_events.append(event)
             elif isinstance(event, TypingEvent):
+                if self_user_id and str(event.user_id) == self_user_id:
+                    continue
                 typing_events.append(event)
             elif isinstance(event, ReactionEvent):
                 reactions.append(event)
             elif isinstance(event, UnsendEvent):
                 unsends.append(event)
     finally:
-        mqtt.router.unsubscribe(thread_id, q)
+        if q is not None:
+            mqtt.router.unsubscribe(thread_id, q)
 
     waited = int(time.time() - start_time)
+    total_reconnects = mqtt.reconnect_count - reconnects_at_start
 
     if not messages:
         result: dict[str, Any] = {
@@ -162,140 +191,42 @@ def _wait_for_reply_mqtt(  # noqa: PLR0912
             "waited_seconds": waited,
         }
 
-    # Compact MQTT metadata
     if seen_events:
         result["seen"] = True
     if typing_events:
         result["typing"] = True
     if reactions:
-        result["reactions"] = [
-            {"emoji": e.emoji, "item_id": e.item_id} for e in reactions
-        ]
+        result["reactions"] = [{"emoji": e.emoji, "item_id": e.item_id} for e in reactions]
     if unsends:
         result["unsent"] = [e.item_id for e in unsends]
 
+    # Diagnostics: always include if any reconnections happened
+    if total_reconnects > 0:
+        result["mqtt_reconnects"] = total_reconnects
+
     return result
-
-
-def _wait_for_reply_rest(  # noqa: PLR0912
-    client: Any,
-    thread_id: str,
-    timeout_minutes: int,
-    poll_interval_seconds: int,
-    double_text_grace_period_seconds: int,
-) -> dict[str, Any]:
-    """REST polling fallback for wait_for_reply."""
-    # SYNC PHASE: Poll until our latest message is visible
-    sync_start = time.time()
-    baseline_timestamp = None
-    sync_attempts = 0
-
-    while time.time() - sync_start < 30:
-        sync_attempts += 1
-        current_messages = client.get_messages(thread_id=thread_id, amount=10)
-
-        for msg in current_messages:
-            if msg.is_sent_by_viewer:
-                baseline_timestamp = msg.timestamp
-                break
-
-        if baseline_timestamp:
-            break
-        time.sleep(1)
-
-    logger.info(
-        "Waiting for reply in thread %s (baseline: %s, synced in %d attempts)",
-        thread_id,
-        baseline_timestamp,
-        sync_attempts,
-    )
-
-    timeout_seconds = _effective_timeout_seconds(timeout_minutes)
-    start_time = time.time()
-    first_new_message_time = None
-
-    while True:
-        elapsed = time.time() - start_time
-
-        if elapsed >= timeout_seconds:
-            return {
-                "timeout": True,
-                "thread_id": thread_id,
-                "waited_minutes": int(elapsed / 60),
-                "waited_seconds": int(elapsed),
-            }
-
-        messages = client.get_messages(thread_id=thread_id, amount=10)
-
-        new_messages = []
-        for msg in messages:
-            if msg.is_sent_by_viewer:
-                continue
-            if baseline_timestamp and msg.timestamp <= baseline_timestamp:
-                continue
-            if msg.content.media_type == MediaType.ACTION_LOG:
-                continue
-            new_messages.append(msg)
-
-        if new_messages:
-            if first_new_message_time is None:
-                first_new_message_time = time.time()
-                logger.info(
-                    "New message detected, waiting %ds for double texts...",
-                    double_text_grace_period_seconds,
-                )
-
-            grace_elapsed = time.time() - first_new_message_time
-            if grace_elapsed >= double_text_grace_period_seconds:
-                new_messages.sort(key=lambda m: m.timestamp)
-
-                msg_list = []
-                for m in new_messages:
-                    d: dict[str, Any] = {
-                        "sender": m.sender.username,
-                        "text": m.content.text,
-                    }
-                    if m.content.media_type.value != "text":
-                        d["media_type"] = m.content.media_type.value
-                    msg_list.append(d)
-
-                return {
-                    "success": True,
-                    "new_messages": msg_list,
-                    "waited_seconds": int(elapsed),
-                }
-
-        time.sleep(poll_interval_seconds)
 
 
 def _send_and_check_mqtt(
     mqtt: Any,
     q: Any,
     thread_id: str,
-    sent_message_id: str,
     self_user_id: str = "",
     user_map: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """MQTT fast path for send_and_check. 0 REST calls for interjection check.
+    """Check for interjections via MQTT after sending. 0 REST calls.
 
     Expects a pre-subscribed queue (subscribed BEFORE the REST send so we
     don't miss interjections during the send latency).  Uses a short 3-second
     base window — if they read or start typing, the deadline extends smartly.
-    Filters out self-echoes (own message pushed back by MQTT).
+    Filters out self-echoes.
     """
     _umap = user_map or {}
-    import queue as queue_mod
 
-    from instagram_mcp.mqtt.events import (
-        MessageEvent,
-        SeenEvent,
-        TypingEvent,
-    )
-
-    _BASE_WINDOW = 3  # seconds — enough for MQTT-speed interjection
-    _SEEN_GRACE = 2  # extra seconds after they read it
-    _TYPING_EXTEND = 5  # extra seconds if typing detected
-    _ABSOLUTE_CAP = 15  # never wait longer than this
+    _BASE_WINDOW = 3
+    _SEEN_GRACE = 2
+    _TYPING_EXTEND = 5
+    _ABSOLUTE_CAP = 15
 
     now = time.time()
     deadline = now + _BASE_WINDOW
@@ -319,15 +250,21 @@ def _send_and_check_mqtt(
 
             if isinstance(event, MessageEvent):
                 if self_user_id and str(event.user_id) == self_user_id:
-                    continue  # own message echoed back by MQTT
+                    continue
                 interjection = event
                 break
-            elif isinstance(event, SeenEvent) and not seen:
-                seen = True
-                deadline = min(time.time() + _SEEN_GRACE, cap)
-            elif isinstance(event, TypingEvent) and not typing:
-                typing = True
-                deadline = min(time.time() + _TYPING_EXTEND, cap)
+            elif isinstance(event, SeenEvent):
+                if self_user_id and str(event.user_id) == self_user_id:
+                    continue
+                if not seen:
+                    seen = True
+                    deadline = min(time.time() + _SEEN_GRACE, cap)
+            elif isinstance(event, TypingEvent):
+                if self_user_id and str(event.user_id) == self_user_id:
+                    continue
+                if not typing:
+                    typing = True
+                    deadline = min(time.time() + _TYPING_EXTEND, cap)
     finally:
         mqtt.router.unsubscribe(thread_id, q)
 
@@ -349,68 +286,8 @@ def _send_and_check_mqtt(
     return result
 
 
-def _send_and_check_rest(
-    client: Any,
-    thread_id: str,
-    sent_message_id: str,
-    sync_timeout_seconds: int,
-) -> dict[str, Any]:
-    """REST polling fallback for send_and_check."""
-    # Get baseline BEFORE syncing
-    pre_send_messages = client.get_messages(thread_id=thread_id, amount=5)
-    baseline_timestamp = None
-    for msg in pre_send_messages:
-        if not msg.is_sent_by_viewer:
-            baseline_timestamp = msg.timestamp
-            break
-
-    # Sync: poll until our message is visible
-    sync_start = time.time()
-    synced = False
-    while time.time() - sync_start < sync_timeout_seconds:
-        messages = client.get_messages(thread_id=thread_id, amount=10)
-        for msg in messages:
-            if msg.message_id == sent_message_id:
-                synced = True
-                break
-        if synced:
-            break
-        time.sleep(0.5)
-
-    if not synced:
-        logger.warning("Sync timeout for message %s", sent_message_id)
-
-    # Check for interjections
-    post_send_messages = client.get_messages(thread_id=thread_id, amount=10)
-    interjections = []
-    for msg in post_send_messages:
-        if msg.is_sent_by_viewer:
-            continue
-        if baseline_timestamp and msg.timestamp <= baseline_timestamp:
-            continue
-        interjections.append(msg)
-
-    result_dict: dict[str, Any] = {
-        "success": True,
-        "message_id": sent_message_id,
-        "has_interjection": len(interjections) > 0,
-    }
-    if interjections:
-        result_dict["interjection"] = {
-            "sender": interjections[0].sender.username,
-            "text": interjections[0].content.text,
-        }
-
-    return result_dict
-
-
 def register_message_tools(mcp: FastMCP, client: InstagramClient) -> None:
-    """Register message operation tools with the MCP server.
-
-    Args:
-        mcp: FastMCP server instance.
-        client: Instagram client instance.
-    """
+    """Register message operation tools with the MCP server."""
 
     @mcp.tool()
     def send_message(
@@ -504,43 +381,31 @@ def register_message_tools(mcp: FastMCP, client: InstagramClient) -> None:
             has_interjection: True if they sent something since you started.
             interjection: Their message if has_interjection, else None.
         """
-        mqtt = _get_mqtt_manager()
         q = None
         try:
-            # MQTT: subscribe BEFORE sending so we catch interjections
-            # that arrive during the 1-2s REST send latency.
-            if mqtt and mqtt.is_connected:
-                q = mqtt.router.subscribe(thread_id)
-
-            # Send the message (1 REST call, always needed)
+            mqtt = _require_mqtt()
+            q = mqtt.router.subscribe(thread_id)
             message = client.reply_to_thread(thread_id=thread_id, text=text)
             if not message:
                 return {"success": False, "error": "Failed to send message"}
 
-            sent_message_id = message.message_id
-
-            # MQTT FAST PATH: 3s interjection window, 0 REST polls
-            if q:
-                self_uid = str(client.client.user_id) if client.client.user_id else ""
-                umap = _get_user_map(client, thread_id)
-                result = _send_and_check_mqtt(
-                    mqtt, q, thread_id, sent_message_id,
-                    self_user_id=self_uid, user_map=umap,
-                )
-                q = None  # already unsubscribed inside _send_and_check_mqtt
-                return result
-
-            # REST SLOW PATH: polling fallback
-            return _send_and_check_rest(
-                client, thread_id, sent_message_id, sync_timeout_seconds
+            self_uid = str(client.client.user_id) if client.client.user_id else ""
+            umap = _get_user_map(client, thread_id)
+            result = _send_and_check_mqtt(
+                mqtt,
+                q,
+                thread_id,
+                self_user_id=self_uid,
+                user_map=umap,
             )
+            q = None  # already unsubscribed inside _send_and_check_mqtt
+            return result
 
         except Exception as e:
             logger.exception("Error in send_and_check for thread %s", thread_id)
             return {"error": str(e)}
         finally:
-            # Clean up subscription if MQTT path wasn't taken (error before it)
-            if q and mqtt:
+            if q:
                 try:
                     mqtt.router.unsubscribe(thread_id, q)
                 except Exception:
@@ -627,7 +492,6 @@ def register_message_tools(mcp: FastMCP, client: InstagramClient) -> None:
 
             lines: list[str] = []
             for m in chronological:
-                # Skip action_log noise
                 if m.content.media_type == MediaType.ACTION_LOG:
                     continue
 
@@ -636,7 +500,6 @@ def register_message_tools(mcp: FastMCP, client: InstagramClient) -> None:
 
                 text = m.content.text or f"[{m.content.media_type.value}]"
 
-                # Annotate seen_since on the chronologically last viewer message
                 seen_tag = ""
                 if (
                     m.is_sent_by_viewer
@@ -697,8 +560,7 @@ def register_message_tools(mcp: FastMCP, client: InstagramClient) -> None:
     ) -> dict[str, Any]:
         """Wait for new messages in a thread. Blocks until reply arrives or timeout.
 
-        This tool first SYNCS (ensures our latest message is visible), then polls
-        for new messages using TIMESTAMP-based detection to avoid race conditions.
+        Uses MQTT push for instant detection (<100ms latency, zero polling).
 
         Use variable timeout_minutes based on your strategy:
         - 5 minutes: Quick checkpoint, good for active conversations
@@ -710,37 +572,26 @@ def register_message_tools(mcp: FastMCP, client: InstagramClient) -> None:
             thread_id: ID of the thread to monitor.
             timeout_minutes: How long to wait before returning (default: 5).
                 Use shorter times for active convos, longer for cooldowns.
-            poll_interval_seconds: How often to check for new messages (default: 3).
+            poll_interval_seconds: Unused (kept for API compat).
             double_text_grace_period_seconds: Extra wait time after first reply
                 to catch rapid follow-up messages (default: 10).
 
         Returns:
             On reply: Object with 'success', 'new_messages' array, 'waited_seconds'.
-            On timeout: Object with 'timeout', 'waited_minutes'.
+            On timeout: Object with 'timeout', 'waited_seconds'.
         """
         try:
-            # MQTT FAST PATH: zero REST polling, <100ms latency
-            mqtt = _get_mqtt_manager()
-            if mqtt and mqtt.is_connected:
-                self_uid = str(client.client.user_id) if client.client.user_id else ""
-                umap = _get_user_map(client, thread_id)
-                return _wait_for_reply_mqtt(
-                    mqtt,
-                    thread_id,
-                    timeout_minutes,
-                    double_text_grace_period_seconds,
-                    self_user_id=self_uid,
-                    user_map=umap,
-                )
-
-            # REST SLOW PATH: polling fallback
-            return _wait_for_reply_rest(
-                client,
+            mqtt = _require_mqtt()
+            self_uid = str(client.client.user_id) if client.client.user_id else ""
+            umap = _get_user_map(client, thread_id)
+            return _wait_for_reply_mqtt(
+                mqtt,
                 thread_id,
                 timeout_minutes,
-                poll_interval_seconds,
                 double_text_grace_period_seconds,
+                self_user_id=self_uid,
+                user_map=umap,
             )
         except Exception as e:
             logger.exception("Error waiting for reply in thread %s", thread_id)
-            return {"error": str(e), "thread_id": thread_id}
+            return {"error": str(e)}

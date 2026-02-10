@@ -160,6 +160,9 @@ class MQTToTConnection:
         try:
             header = self._sock.recv(1)
             if not header:
+                # Remote end closed the connection — mark socket dead immediately
+                logger.debug("recv returned empty bytes, connection closed by remote")
+                self._sock = None
                 return None
             first_byte = header[0]
             ptype = (first_byte >> 4) & 0x0F
@@ -170,6 +173,8 @@ class MQTToTConnection:
             while True:
                 byte_data = self._sock.recv(1)
                 if not byte_data:
+                    logger.debug("Connection closed mid-packet (remaining length)")
+                    self._sock = None
                     return None
                 remaining += (byte_data[0] & 0x7F) * multiplier
                 multiplier *= 128
@@ -181,6 +186,8 @@ class MQTToTConnection:
             while len(body) < remaining:
                 chunk = self._sock.recv(remaining - len(body))
                 if not chunk:
+                    logger.debug("Connection closed mid-packet (body)")
+                    self._sock = None
                     break
                 body.extend(chunk)
 

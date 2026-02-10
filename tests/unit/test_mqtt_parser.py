@@ -73,7 +73,7 @@ class TestParseIrisMessageEvent:
             ]
         )
 
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 1
         assert isinstance(events[0], MessageEvent)
         msg = events[0]
@@ -104,7 +104,7 @@ class TestParseIrisMessageEvent:
             ]
         )
 
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 1
         assert isinstance(events[0], MessageEvent)
         assert events[0].item_type == "media"
@@ -141,11 +141,56 @@ class TestParseIrisMessageEvent:
         ]
         payload = self._make_payload(patches)
 
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 2
         assert all(isinstance(e, MessageEvent) for e in events)
         assert events[0].text == "first"
         assert events[1].text == "second"
+
+
+class TestParseIrisSeqId:
+    """Tests for seq_id extraction from Iris payloads."""
+
+    def test_seq_id_returned(self) -> None:
+        data = [
+            {
+                "event": "patch",
+                "data": [
+                    {
+                        "op": "add",
+                        "path": "/direct_v2/threads/T1/items/I1",
+                        "value": json.dumps(
+                            {"item_id": "I1", "user_id": 1, "timestamp": "0", "item_type": "text", "text": "hi"}
+                        ),
+                    }
+                ],
+                "seq_id": 42000,
+            }
+        ]
+        payload = zlib.compress(json.dumps(data).encode())
+        events, seq_id = parse_payload("146", payload)
+        assert len(events) == 1
+        assert seq_id == 42000
+
+    def test_max_seq_id_across_items(self) -> None:
+        data = [
+            {"event": "patch", "data": [], "seq_id": 100},
+            {"event": "patch", "data": [], "seq_id": 300},
+            {"event": "patch", "data": [], "seq_id": 200},
+        ]
+        payload = zlib.compress(json.dumps(data).encode())
+        _, seq_id = parse_payload("146", payload)
+        assert seq_id == 300
+
+    def test_seq_id_zero_for_non_iris(self) -> None:
+        payload = zlib.compress(json.dumps({"test": True}).encode())
+        _, seq_id = parse_payload("88", payload)
+        assert seq_id == 0
+
+    def test_seq_id_zero_for_unknown_topic(self) -> None:
+        payload = zlib.compress(json.dumps({"test": True}).encode())
+        _, seq_id = parse_payload("999", payload)
+        assert seq_id == 0
 
 
 class TestParseIrisUnsendEvent:
@@ -165,7 +210,7 @@ class TestParseIrisUnsendEvent:
         ]
         payload = zlib.compress(json.dumps(data).encode())
 
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 1
         assert isinstance(events[0], UnsendEvent)
         assert events[0].thread_id == "T1"
@@ -189,7 +234,7 @@ class TestParseIrisUnsendEvent:
         ]
         payload = zlib.compress(json.dumps(data).encode())
 
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 1
         assert isinstance(events[0], UnsendEvent)
         assert events[0].user_id == 0
@@ -214,7 +259,7 @@ class TestParseIrisSeenEvent:
         ]
         payload = zlib.compress(json.dumps(data).encode())
 
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 1
         assert isinstance(events[0], SeenEvent)
         assert events[0].thread_id == "T1"
@@ -240,7 +285,7 @@ class TestParseIrisReactionEvent:
         ]
         payload = zlib.compress(json.dumps(data).encode())
 
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 1
         assert isinstance(events[0], ReactionEvent)
         assert events[0].thread_id == "T1"
@@ -265,7 +310,7 @@ class TestParseIrisReactionEvent:
         ]
         payload = zlib.compress(json.dumps(data).encode())
 
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 1
         assert isinstance(events[0], ReactionEvent)
         assert events[0].emoji is None
@@ -296,7 +341,7 @@ class TestParseIrisTypingEvent:
         ]
         payload = zlib.compress(json.dumps(data).encode())
 
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 1
         assert isinstance(events[0], TypingEvent)
         assert events[0].thread_id == "T1"
@@ -322,7 +367,7 @@ class TestParseIrisThreadEvent:
         ]
         payload = zlib.compress(json.dumps(data).encode())
 
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 1
         assert isinstance(events[0], ThreadEvent)
         assert events[0].thread_id == "T99"
@@ -343,7 +388,7 @@ class TestParsePubsubTyping:
         }
         payload = zlib.compress(json.dumps(data).encode())
 
-        events = parse_payload("88", payload)
+        events, _ = parse_payload("88", payload)
         assert len(events) == 1
         assert isinstance(events[0], TypingEvent)
         assert events[0].thread_id == "T5"
@@ -354,22 +399,22 @@ class TestParsePubsubTyping:
 class TestParseEdgeCases:
     def test_unhandled_topic(self) -> None:
         payload = zlib.compress(b'{"test": true}')
-        events = parse_payload("999", payload)
+        events, _ = parse_payload("999", payload)
         assert events == []
 
     def test_invalid_zlib(self) -> None:
-        events = parse_payload("146", b"not-zlib-data")
+        events, _ = parse_payload("146", b"not-zlib-data")
         assert events == []
 
     def test_invalid_json(self) -> None:
         payload = zlib.compress(b"not json")
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert events == []
 
     def test_empty_data_array(self) -> None:
         data = [{"event": "patch", "data": [], "seq_id": 0}]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert events == []
 
     def test_non_list_iris_payload(self) -> None:
@@ -394,20 +439,20 @@ class TestParseEdgeCases:
             "seq_id": 1,
         }
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 1
         assert isinstance(events[0], MessageEvent)
 
     def test_non_dict_sync_item_skipped(self) -> None:
         data = ["not_a_dict", 42]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert events == []
 
     def test_non_dict_patch_skipped(self) -> None:
         data = [{"event": "patch", "data": ["not_a_dict"], "seq_id": 0}]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert events == []
 
     def test_unrecognized_path(self) -> None:
@@ -420,7 +465,7 @@ class TestParseEdgeCases:
             }
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert events == []
 
     def test_short_thread_path(self) -> None:
@@ -433,7 +478,7 @@ class TestParseEdgeCases:
             }
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert events == []
 
     def test_message_invalid_value_json(self) -> None:
@@ -452,7 +497,7 @@ class TestParseEdgeCases:
             }
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert events == []
 
     def test_message_non_dict_value(self) -> None:
@@ -471,7 +516,7 @@ class TestParseEdgeCases:
             }
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert events == []
 
     def test_seen_invalid_user_id(self) -> None:
@@ -490,7 +535,7 @@ class TestParseEdgeCases:
             }
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert events == []
 
     def test_reaction_short_path(self) -> None:
@@ -509,7 +554,7 @@ class TestParseEdgeCases:
             }
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         # Path has items subpath + op=add but < 9 parts so reaction check fails.
         # Falls through to message add (items + len >= 6 + op=add).
         assert len(events) == 1
@@ -531,7 +576,7 @@ class TestParseEdgeCases:
             }
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         # _parse_reaction returns None (ValueError on int("not_number"))
         assert len(events) == 0
 
@@ -551,7 +596,7 @@ class TestParseEdgeCases:
             }
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         # Returns None from _parse_activity_indicator, no event
         assert events == []
 
@@ -570,7 +615,7 @@ class TestParseEdgeCases:
             }
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert events == []
 
     def test_generic_thread_subpath(self) -> None:
@@ -589,37 +634,37 @@ class TestParseEdgeCases:
             }
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 1
         assert isinstance(events[0], ThreadEvent)
 
     def test_non_numeric_topic(self) -> None:
         payload = zlib.compress(b"{}")
-        events = parse_payload("not_a_number", payload)
+        events, _ = parse_payload("not_a_number", payload)
         assert events == []
 
     def test_pubsub_non_dict_data(self) -> None:
         payload = zlib.compress(json.dumps("just a string").encode())
-        events = parse_payload("88", payload)
+        events, _ = parse_payload("88", payload)
         assert events == []
 
     def test_pubsub_non_dict_item(self) -> None:
         payload = zlib.compress(json.dumps([42, "not_dict"]).encode())
-        events = parse_payload("88", payload)
+        events, _ = parse_payload("88", payload)
         assert events == []
 
     def test_pubsub_no_sender_id(self) -> None:
         """Pubsub item without sender_id is skipped."""
         data = {"path": "/something", "value": json.dumps({"no_sender": True})}
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("88", payload)
+        events, _ = parse_payload("88", payload)
         assert events == []
 
     def test_pubsub_invalid_value_json(self) -> None:
         """Pubsub item with invalid JSON value string is skipped."""
         data = {"path": "/something", "value": "not-json{{{"}
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("88", payload)
+        events, _ = parse_payload("88", payload)
         assert events == []
 
     def test_pubsub_list_format(self) -> None:
@@ -631,7 +676,7 @@ class TestParseEdgeCases:
             },
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("88", payload)
+        events, _ = parse_payload("88", payload)
         assert len(events) == 1
         assert isinstance(events[0], TypingEvent)
         assert events[0].activity_status == 2
@@ -651,7 +696,7 @@ class TestParseEdgeCases:
             }
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert events == []
 
     def test_unsend_invalid_value_json(self) -> None:
@@ -670,7 +715,7 @@ class TestParseEdgeCases:
             }
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 1
         assert isinstance(events[0], UnsendEvent)
         assert events[0].user_id == 0
@@ -700,7 +745,7 @@ class TestParseEdgeCases:
             }
         ]
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("146", payload)
+        events, _ = parse_payload("146", payload)
         assert len(events) == 1
         assert isinstance(events[0], MessageEvent)
         assert events[0].text == "edited"
@@ -714,8 +759,157 @@ class TestParseEdgeCases:
             "thread_id": "T8",
         }
         payload = zlib.compress(json.dumps(data).encode())
-        events = parse_payload("88", payload)
+        events, _ = parse_payload("88", payload)
         assert len(events) == 1
         assert isinstance(events[0], TypingEvent)
         assert events[0].thread_id == "T8"
         assert events[0].user_id == 222
+
+    def test_message_with_dict_value_not_str(self) -> None:
+        """Value is already a dict (not a JSON string) — should still parse."""
+        from instagram_mcp.mqtt.parser import _parse_message
+
+        result = _parse_message(
+            "T1", "I1",
+            {"item_id": "I1", "user_id": 7, "text": "raw dict", "item_type": "text", "timestamp": 100},
+        )
+        assert result is not None
+        assert isinstance(result, MessageEvent)
+        assert result.text == "raw dict"
+
+    def test_unsend_with_non_dict_value(self) -> None:
+        """Unsend where parsed value is a list → user_id stays 0."""
+        from instagram_mcp.mqtt.parser import _parse_unsend
+
+        result = _parse_unsend("T1", "I1", json.dumps([1, 2, 3]))
+        assert isinstance(result, UnsendEvent)
+        assert result.user_id == 0
+
+    def test_unsend_with_dict_value_object(self) -> None:
+        """Unsend where value is already a dict (not str)."""
+        from instagram_mcp.mqtt.parser import _parse_unsend
+
+        result = _parse_unsend("T1", "I1", {"user_id": 42})
+        assert isinstance(result, UnsendEvent)
+        assert result.user_id == 42
+
+    def test_unsend_with_value_error_in_user_id(self) -> None:
+        """Unsend where user_id is non-numeric → falls back to 0."""
+        from instagram_mcp.mqtt.parser import _parse_unsend
+
+        result = _parse_unsend("T1", "I1", json.dumps({"user_id": "not_a_number"}))
+        assert isinstance(result, UnsendEvent)
+        assert result.user_id == 0
+
+    def test_seen_with_non_dict_value(self) -> None:
+        """Seen event where value is a list → still returns SeenEvent."""
+        from instagram_mcp.mqtt.parser import _parse_seen
+
+        result = _parse_seen("T1", "123", json.dumps([1, 2]))
+        assert result is not None
+        assert isinstance(result, SeenEvent)
+        assert result.item_id == ""  # No dict to extract from
+        assert result.timestamp == 0
+
+    def test_seen_with_dict_value_object(self) -> None:
+        """Seen where value is already a dict."""
+        from instagram_mcp.mqtt.parser import _parse_seen
+
+        result = _parse_seen("T1", "456", {"item_id": "X", "timestamp": 999})
+        assert result is not None
+        assert isinstance(result, SeenEvent)
+        assert result.item_id == "X"
+        assert result.timestamp == 999
+
+    def test_reaction_remove_no_emoji(self) -> None:
+        """Reaction remove op → emoji is None."""
+        from instagram_mcp.mqtt.parser import _parse_reaction
+
+        parts = ["", "direct_v2", "threads", "T1", "items", "I1", "reactions", "likes", "555"]
+        result = _parse_reaction("T1", "I1", "remove", parts, "{}")
+        assert result is not None
+        assert isinstance(result, ReactionEvent)
+        assert result.emoji is None
+
+    def test_reaction_with_dict_value(self) -> None:
+        """Reaction where value is already a dict."""
+        from instagram_mcp.mqtt.parser import _parse_reaction
+
+        parts = ["", "direct_v2", "threads", "T1", "items", "I1", "reactions", "emojis", "777"]
+        result = _parse_reaction("T1", "I1", "add", parts, {"emoji": "😂"})
+        assert result is not None
+        assert result.emoji == "😂"
+
+    def test_reaction_with_invalid_emoji_json(self) -> None:
+        """Reaction with invalid JSON value → emoji is None."""
+        from instagram_mcp.mqtt.parser import _parse_reaction
+
+        parts = ["", "direct_v2", "threads", "T1", "items", "I1", "reactions", "emojis", "777"]
+        result = _parse_reaction("T1", "I1", "add", parts, "not-json")
+        assert result is not None
+        assert result.emoji is None
+
+    def test_activity_indicator_with_dict_value(self) -> None:
+        """Activity indicator where value is already a dict."""
+        from instagram_mcp.mqtt.parser import _parse_activity_indicator
+
+        result = _parse_activity_indicator("T1", {"sender_id": 11, "activity_status": 2, "ttl": 5000})
+        assert result is not None
+        assert isinstance(result, TypingEvent)
+        assert result.user_id == 11
+
+    def test_pubsub_thread_id_from_path_and_fallback(self) -> None:
+        """Pubsub extracts thread_id from path, falls back to value."""
+        data = {
+            "path": "/direct_v2/threads/T_FROM_PATH/something",
+            "value": json.dumps({
+                "sender_id": "100",
+                "activity_status": 1,
+                "ttl": 1000,
+                "thread_id": "T_FROM_VALUE",
+            }),
+        }
+        payload = zlib.compress(json.dumps(data).encode())
+        events, _ = parse_payload("88", payload)
+        assert len(events) == 1
+        # path extraction wins over value
+        assert events[0].thread_id == "T_FROM_PATH"
+
+    def test_pubsub_no_path_uses_value_thread_id(self) -> None:
+        """Pubsub with no path falls back to thread_id from value."""
+        data = {
+            "sender_id": "100",
+            "activity_status": 0,
+            "ttl": 0,
+            "thread_id": "T_FALLBACK",
+        }
+        payload = zlib.compress(json.dumps(data).encode())
+        events, _ = parse_payload("88", payload)
+        assert len(events) == 1
+        assert events[0].thread_id == "T_FALLBACK"
+
+    def test_items_with_unknown_op(self) -> None:
+        """Items path with op that's not add/remove/replace → no event."""
+        data = [
+            {
+                "event": "patch",
+                "data": [
+                    {
+                        "op": "test",
+                        "path": "/direct_v2/threads/T1/items/I1",
+                        "value": "{}",
+                    }
+                ],
+                "seq_id": 0,
+            }
+        ]
+        payload = zlib.compress(json.dumps(data).encode())
+        events, _ = parse_payload("146", payload)
+        # op=test doesn't match add/remove/replace → falls through to
+        # generic ThreadEvent since subpath=items with len>=6 but no match
+        # Actually, the items branch returns None for unknown ops
+        # Let me trace: items + len >= 6 + op="test" → not add, not remove, not replace → falls through
+        # Back to the outer if chain: subpath != "participants", subpath != "activity_indicator_id"
+        # → falls through to generic ThreadEvent
+        assert len(events) == 1
+        assert isinstance(events[0], ThreadEvent)

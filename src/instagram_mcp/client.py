@@ -7,7 +7,6 @@ session persistence and proper error handling for MCP server usage.
 import json
 import logging
 import sys
-import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -438,7 +437,10 @@ class InstagramClient:
         self.session_file = session_file or Path(".instagram_session")
         self._logged_in = False
         self._app_version = app_version
-        self._lock = threading.RLock()
+        # Patch instagrapi's requests Session with a default 30s timeout.
+        # Without this, HTTP calls can block forever if Instagram stalls
+        # the connection (silent rate limit after rapid-fire calls).
+        self._patch_request_timeout(30)
         if app_version:
             self._apply_app_version(app_version)
 
@@ -453,6 +455,25 @@ class InstagramClient:
             f"Challenge required for {username} (method: {choice}). "
             "Run 'instagram-mcp-login' to resolve interactively."
         )
+
+    def _patch_request_timeout(self, timeout: int) -> None:
+        """Patch the instagrapi HTTP session with a default socket timeout.
+
+        instagrapi's ``private.post()``/``private.get()`` calls never pass a
+        ``timeout`` to the underlying ``requests`` library, so they default to
+        ``None`` (wait forever).  After rapid-fire calls Instagram may stall the
+        TCP connection instead of returning 429, causing a permanent hang.
+
+        This patches ``Session.request`` so every HTTP call has a ceiling.
+        """
+        session = self.client.private
+        original_request = session.request
+
+        def _request_with_timeout(*args: Any, **kwargs: Any) -> Any:
+            kwargs.setdefault("timeout", timeout)
+            return original_request(*args, **kwargs)
+
+        session.request = _request_with_timeout  # type: ignore[assignment]
 
     def _apply_app_version(self, version: str) -> None:
         """Patch the instagrapi client to emulate a specific Instagram app version.
@@ -477,25 +498,34 @@ class InstagramClient:
     def _retry_on_rate_limit(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
         """Execute operation with exponential backoff on rate limit errors.
 
-        Retries infinitely with delay doubling each attempt, capped at 30 seconds.
-        Catches HTTP 467 (Instagram-specific) and 429 (standard) rate limit errors.
+        Retries up to 5 times with delay doubling each attempt, capped at 30s.
+        Catches HTTP 467 (Instagram-specific), 429 (standard), and request
+        timeouts (from the 30s socket ceiling).  After max retries, raises.
         """
         max_delay = 30.0
+        max_retries = 5
         attempt = 0
         while True:
             try:
-                with self._lock:
-                    return operation(*args, **kwargs)
+                return operation(*args, **kwargs)
             except Exception as e:
                 error_str = str(e)
-                if "467" not in error_str and "429" not in error_str:
+                is_rate_limit = "467" in error_str or "429" in error_str
+                is_timeout = "timeout" in error_str.lower() or "timed out" in error_str.lower()
+                if not is_rate_limit and not is_timeout:
                     raise
                 attempt += 1
+                if attempt > max_retries:
+                    logger.error(
+                        "Max retries (%d) exceeded: %s", max_retries, e,
+                    )
+                    raise
                 backoff = min(2 ** (attempt - 1), max_delay)
                 logger.warning(
-                    "Rate limited, retry in %.0fs (attempt %d): %s",
+                    "Rate limited/timeout, retry in %.0fs (attempt %d/%d): %s",
                     backoff,
                     attempt,
+                    max_retries,
                     e,
                 )
                 time.sleep(backoff)
@@ -645,8 +675,7 @@ class InstagramClient:
         Returns:
             list[DirectThread]: List of thread models.
         """
-        with self._lock:
-            threads = self.client.direct_threads(amount=amount)
+        threads = self.client.direct_threads(amount=amount)
         return [_convert_thread(t) for t in threads]
 
     def get_thread(self, thread_id: str, amount: int = 20) -> DirectThread:
@@ -671,8 +700,7 @@ class InstagramClient:
         Returns:
             list[DirectThread]: List of pending thread models.
         """
-        with self._lock:
-            threads = self.client.direct_pending_inbox()
+        threads = self.client.direct_pending_inbox()
         return [_convert_thread(t) for t in threads]
 
     def search_threads(self, query: str) -> list[DirectThread]:
@@ -687,8 +715,7 @@ class InstagramClient:
             list[DirectThread]: List of matching thread models.
         """
         query_lower = query.lower()
-        with self._lock:
-            all_threads = self.client.direct_threads(amount=50)
+        all_threads = self.client.direct_threads(amount=50)
         matching = []
         for t in all_threads:
             # Check thread title
@@ -711,8 +738,7 @@ class InstagramClient:
         Returns:
             bool: True if successful.
         """
-        with self._lock:
-            return bool(self.client.direct_thread_hide(thread_id=int(thread_id)))
+        return bool(self.client.direct_thread_hide(thread_id=int(thread_id)))
 
     def mark_thread_unread(self, thread_id: str) -> bool:
         """Mark a thread as unread.
@@ -723,8 +749,7 @@ class InstagramClient:
         Returns:
             bool: True if successful.
         """
-        with self._lock:
-            return bool(self.client.direct_thread_mark_unread(thread_id=int(thread_id)))
+        return bool(self.client.direct_thread_mark_unread(thread_id=int(thread_id)))
 
     def mute_thread(self, thread_id: str) -> bool:
         """Mute notifications for a thread.
@@ -735,8 +760,7 @@ class InstagramClient:
         Returns:
             bool: True if successful.
         """
-        with self._lock:
-            return bool(self.client.direct_thread_mute(thread_id=int(thread_id)))
+        return bool(self.client.direct_thread_mute(thread_id=int(thread_id)))
 
     def unmute_thread(self, thread_id: str) -> bool:
         """Unmute notifications for a thread.
@@ -747,8 +771,7 @@ class InstagramClient:
         Returns:
             bool: True if successful.
         """
-        with self._lock:
-            return bool(self.client.direct_thread_unmute(thread_id=int(thread_id)))
+        return bool(self.client.direct_thread_unmute(thread_id=int(thread_id)))
 
     # Message operations
     def send_message(
@@ -770,12 +793,11 @@ class InstagramClient:
         user_ids_int = [int(uid) for uid in user_ids] if user_ids else None
         thread_ids_int = [int(tid) for tid in thread_ids] if thread_ids else None
 
-        with self._lock:
-            result = self.client.direct_send(
-                text=text,
-                user_ids=user_ids_int,
-                thread_ids=thread_ids_int,
-            )
+        result = self.client.direct_send(
+            text=text,
+            user_ids=user_ids_int,
+            thread_ids=thread_ids_int,
+        )
         if result:
             tid = str(result.thread_id) if hasattr(result, "thread_id") else ""
             return _convert_message(result, tid)
@@ -791,8 +813,7 @@ class InstagramClient:
         Returns:
             DirectMessage: The sent message, or None if failed.
         """
-        with self._lock:
-            result = self.client.direct_answer(thread_id=int(thread_id), text=text)
+        result = self.client.direct_answer(thread_id=int(thread_id), text=text)
         if result:
             return _convert_message(result, thread_id)
         return None
@@ -860,12 +881,11 @@ class InstagramClient:
         Returns:
             bool: True if successful.
         """
-        with self._lock:
-            return bool(
-                self.client.direct_message_delete(
-                    thread_id=int(thread_id), message_id=int(message_id)
-                )
+        return bool(
+            self.client.direct_message_delete(
+                thread_id=int(thread_id), message_id=int(message_id)
             )
+        )
 
     # Media operations
     def send_photo(
@@ -887,12 +907,11 @@ class InstagramClient:
         user_ids_int = [int(uid) for uid in user_ids] if user_ids else None
         thread_ids_int = [int(tid) for tid in thread_ids] if thread_ids else None
 
-        with self._lock:
-            result = self.client.direct_send_photo(
-                path=path,
-                user_ids=user_ids_int,
-                thread_ids=thread_ids_int,
-            )
+        result = self.client.direct_send_photo(
+            path=path,
+            user_ids=user_ids_int,
+            thread_ids=thread_ids_int,
+        )
         if result:
             tid = str(result.thread_id) if hasattr(result, "thread_id") else ""
             return _convert_message(result, tid)
@@ -917,12 +936,11 @@ class InstagramClient:
         user_ids_int = [int(uid) for uid in user_ids] if user_ids else None
         thread_ids_int = [int(tid) for tid in thread_ids] if thread_ids else None
 
-        with self._lock:
-            result = self.client.direct_send_video(
-                path=path,
-                user_ids=user_ids_int,
-                thread_ids=thread_ids_int,
-            )
+        result = self.client.direct_send_video(
+            path=path,
+            user_ids=user_ids_int,
+            thread_ids=thread_ids_int,
+        )
         if result:
             tid = str(result.thread_id) if hasattr(result, "thread_id") else ""
             return _convert_message(result, tid)
@@ -947,14 +965,13 @@ class InstagramClient:
         user_ids_int = [int(uid) for uid in user_ids] if user_ids else []
         thread_ids_int = [int(tid) for tid in thread_ids] if thread_ids else None
 
-        with self._lock:
-            return bool(
-                self.client.direct_media_share(
-                    media_id=media_id,
-                    user_ids=user_ids_int,
-                    thread_ids=thread_ids_int,
-                )
+        return bool(
+            self.client.direct_media_share(
+                media_id=media_id,
+                user_ids=user_ids_int,
+                thread_ids=thread_ids_int,
             )
+        )
 
     def share_profile(
         self,
@@ -975,14 +992,13 @@ class InstagramClient:
         target_ids_int = [int(uid) for uid in target_user_ids] if target_user_ids else []
         thread_ids_int = [int(tid) for tid in thread_ids] if thread_ids else None
 
-        with self._lock:
-            return bool(
-                self.client.direct_profile_share(
-                    user_id=int(user_id),
-                    user_ids=target_ids_int,
-                    thread_ids=thread_ids_int,
-                )
+        return bool(
+            self.client.direct_profile_share(
+                user_id=int(user_id),
+                user_ids=target_ids_int,
+                thread_ids=thread_ids_int,
             )
+        )
 
 
 def interactive_login() -> None:

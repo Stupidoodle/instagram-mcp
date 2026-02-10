@@ -50,7 +50,7 @@ def parse_publish_packet(first_byte: int, body: bytes) -> tuple[str, int | None,
     return topic, packet_id, body[payload_start:]
 
 
-def parse_payload(topic: str, raw_payload: bytes) -> list[Event]:
+def parse_payload(topic: str, raw_payload: bytes) -> tuple[list[Event], int]:
     """Parse a raw MQTT payload into typed Event objects.
 
     Args:
@@ -58,30 +58,34 @@ def parse_payload(topic: str, raw_payload: bytes) -> list[Event]:
         raw_payload: The raw (possibly zlib-compressed) payload bytes.
 
     Returns:
-        List of parsed Event objects. May be empty if the payload
-        contains no events we handle.
+        Tuple of (events, max_seq_id). max_seq_id is the highest Iris
+        sequence ID seen in this payload (0 if none / not Iris topic).
     """
     topic_int = int(topic) if topic.isdigit() else -1
     topic_name = TOPIC_NAMES.get(topic, topic)
 
     # Only process topics we handle; skip the rest silently.
     if topic_int not in (MESSAGE_SYNC, PUBSUB):
-        return []
+        return [], 0
 
     try:
         decompressed = zlib.decompress(raw_payload)
         text = decompressed.decode("utf-8", errors="replace")
         data = json.loads(text)
     except Exception:
-        logger.warning("Could not decompress/parse payload on %s (%dB)", topic_name, len(raw_payload))
-        return []
+        logger.warning(
+            "Could not decompress/parse payload on %s (%dB)",
+            topic_name,
+            len(raw_payload),
+        )
+        return [], 0
 
     if topic_int == MESSAGE_SYNC:
         return _parse_iris_payload(data)
-    return _parse_pubsub_payload(data)
+    return _parse_pubsub_payload(data), 0
 
 
-def _parse_iris_payload(data: Any) -> list[Event]:
+def _parse_iris_payload(data: Any) -> tuple[list[Event], int]:
     """Parse topic 146 Iris patch payload into events.
 
     The payload is a JSON array of patch objects:
@@ -91,8 +95,14 @@ def _parse_iris_payload(data: Any) -> list[Event]:
         "seq_id": 12345,
         "realtime": true
     }]
+
+    Returns:
+        Tuple of (events, max_seq_id). max_seq_id is the highest seq_id
+        seen across all sync items, used to advance the Iris subscription
+        cursor on reconnect.
     """
     events: list[Event] = []
+    max_seq_id = 0
 
     if not isinstance(data, list):
         data = [data]
@@ -100,6 +110,11 @@ def _parse_iris_payload(data: Any) -> list[Event]:
     for sync_item in data:
         if not isinstance(sync_item, dict):
             continue
+
+        # Track the highest seq_id for reconnection
+        seq_id = sync_item.get("seq_id", 0)
+        if isinstance(seq_id, int) and seq_id > max_seq_id:
+            max_seq_id = seq_id
 
         for patch in sync_item.get("data", []):
             if not isinstance(patch, dict):
@@ -113,7 +128,7 @@ def _parse_iris_payload(data: Any) -> list[Event]:
             if parsed:
                 events.append(parsed)
 
-    return events
+    return events, max_seq_id
 
 
 def _parse_iris_patch(op: str, path: str, value_str: str) -> Event | None:  # noqa: PLR0911

@@ -65,6 +65,7 @@ dmypy.json
 
 # Instagram session files
 .instagram_session
+.instagram_session_*
 *.session
 session.json
 
