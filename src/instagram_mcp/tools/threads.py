@@ -92,6 +92,20 @@ def register_thread_tools(mcp: "FastMCP", client: "InstagramClient") -> None:
                         "timestamp": m.timestamp.isoformat(),
                         "is_sent_by_viewer": m.is_sent_by_viewer,
                         "seen_since": m.seen_since,
+                        "reactions": (
+                            {
+                                "emojis": [
+                                    {
+                                        "emoji": r.emoji,
+                                        "sender_id": r.sender_id,
+                                        "timestamp": r.timestamp.isoformat(),
+                                    }
+                                    for r in m.content.reactions.emojis
+                                ]
+                            }
+                            if m.content.reactions and m.content.reactions.emojis
+                            else None
+                        ),
                     }
                     for m in thread.messages
                 ],

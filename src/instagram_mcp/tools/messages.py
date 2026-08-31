@@ -179,7 +179,9 @@ def register_message_tools(mcp: "FastMCP", client: "InstagramClient") -> None:
                     "sender": interjections[0].sender.username,
                     "text": interjections[0].content.text,
                     "timestamp": interjections[0].timestamp.isoformat(),
-                } if interjections else None,
+                }
+                if interjections
+                else None,
                 "recent_messages": [
                     {
                         "sender": m.sender.username,
@@ -222,6 +224,20 @@ def register_message_tools(mcp: "FastMCP", client: "InstagramClient") -> None:
                         "timestamp": m.timestamp.isoformat(),
                         "is_sent_by_viewer": m.is_sent_by_viewer,
                         "seen_since": m.seen_since,
+                        "reactions": (
+                            {
+                                "emojis": [
+                                    {
+                                        "emoji": r.emoji,
+                                        "sender_id": r.sender_id,
+                                        "timestamp": r.timestamp.isoformat(),
+                                    }
+                                    for r in m.content.reactions.emojis
+                                ]
+                            }
+                            if m.content.reactions and m.content.reactions.emojis
+                            else None
+                        ),
                     }
                     for m in messages
                 ],
@@ -250,9 +266,7 @@ def register_message_tools(mcp: "FastMCP", client: "InstagramClient") -> None:
                 "message_id": message_id,
             }
         except Exception as e:
-            logger.exception(
-                "Error deleting message %s from thread %s", message_id, thread_id
-            )
+            logger.exception("Error deleting message %s from thread %s", message_id, thread_id)
             return {"error": str(e), "thread_id": thread_id, "message_id": message_id}
 
     @mcp.tool()

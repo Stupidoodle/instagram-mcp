@@ -45,10 +45,32 @@ class ThreadUser(BaseModel):
     user_id: str = Field(..., description="Instagram user ID")
     username: str = Field(..., description="Instagram username")
     full_name: str = Field(default="", description="User's display name")
-    profile_pic_url: str | None = Field(
-        default=None, description="URL to profile picture"
-    )
+    profile_pic_url: str | None = Field(default=None, description="URL to profile picture")
     is_verified: bool = Field(default=False, description="Whether user is verified")
+
+
+class EmojiReaction(BaseModel):
+    """A single emoji reaction on a message.
+
+    Attributes:
+        emoji: The emoji character (e.g. '😆', '❤️').
+        sender_id: Instagram user ID of the reactor.
+        timestamp: When the reaction was added.
+    """
+
+    emoji: str = Field(..., description="Emoji character")
+    sender_id: str = Field(..., description="ID of user who reacted")
+    timestamp: datetime = Field(..., description="When the reaction was added")
+
+
+class Reactions(BaseModel):
+    """Reactions on a message.
+
+    Attributes:
+        emojis: List of emoji reactions.
+    """
+
+    emojis: list[EmojiReaction] = Field(default_factory=list, description="Emoji reactions")
 
 
 class MessageContent(BaseModel):
@@ -58,11 +80,13 @@ class MessageContent(BaseModel):
         text: Text content of the message (if any).
         media_url: URL to media content (if any).
         media_type: Type of media content.
+        reactions: Emoji reactions on this message (if any).
     """
 
     text: str | None = Field(default=None, description="Text content")
     media_url: str | None = Field(default=None, description="Media URL")
     media_type: MediaType = Field(default=MediaType.TEXT, description="Type of media")
+    reactions: Reactions | None = Field(default=None, description="Emoji reactions on this message")
 
 
 class DirectMessage(BaseModel):
@@ -82,9 +106,7 @@ class DirectMessage(BaseModel):
     sender: ThreadUser = Field(..., description="Message sender")
     content: MessageContent = Field(..., description="Message content")
     timestamp: datetime = Field(..., description="Message timestamp")
-    is_sent_by_viewer: bool = Field(
-        default=False, description="Whether sent by authenticated user"
-    )
+    is_sent_by_viewer: bool = Field(default=False, description="Whether sent by authenticated user")
     seen_since: int | None = Field(
         default=None,
         description="Minutes since recipient saw this message (null if not seen yet)",
@@ -109,13 +131,9 @@ class DirectThread(BaseModel):
     thread_id: str = Field(..., description="Unique thread ID")
     thread_title: str = Field(default="", description="Thread title")
     users: list[ThreadUser] = Field(default_factory=list, description="Thread users")
-    last_activity_at: datetime | None = Field(
-        default=None, description="Last activity timestamp"
-    )
+    last_activity_at: datetime | None = Field(default=None, description="Last activity timestamp")
     is_group: bool = Field(default=False, description="Whether this is a group thread")
     is_muted: bool = Field(default=False, description="Whether thread is muted")
     unread: bool = Field(default=False, description="Whether there are unread messages")
     message_count: int = Field(default=0, description="Number of messages")
-    messages: list[DirectMessage] = Field(
-        default_factory=list, description="Messages in thread"
-    )
+    messages: list[DirectMessage] = Field(default_factory=list, description="Messages in thread")

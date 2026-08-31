@@ -103,9 +103,7 @@ def main() -> None:
     except (AuthenticationError, SessionError) as e:
         # Write error to stderr since stdout is for MCP protocol
         print(f"Failed to start server: {e}", file=sys.stderr)
-        print(
-            "Run 'instagram-mcp-login' to authenticate first.", file=sys.stderr
-        )
+        print("Run 'instagram-mcp-login' to authenticate first.", file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
         sys.exit(0)

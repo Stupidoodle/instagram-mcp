@@ -196,9 +196,7 @@ class TestWaitForReplyTool:
 
     @patch("instagram_mcp.tools.messages.time.sleep")
     @patch("instagram_mcp.tools.messages.time.time")
-    def test_wait_for_reply_success(
-        self, mock_time: MagicMock, mock_sleep: MagicMock
-    ) -> None:
+    def test_wait_for_reply_success(self, mock_time: MagicMock, mock_sleep: MagicMock) -> None:
         """Test successful detection of new reply."""
         # Use a counter for time.time() - sync phase + main loop needs many calls
         time_values = iter([0, 0, 0, 3, 6, 6, 17, 17])
@@ -206,13 +204,11 @@ class TestWaitForReplyTool:
 
         # Our baseline message (timestamp T0)
         baseline_msg = self._create_message(
-            "100", "Hello", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "Hello", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         # Their new message (timestamp > T0)
         new_msg = self._create_message(
-            "101", "Hey there!", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101", "Hey there!", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 1, 0)
         )
 
         self.mock_client.get_messages.side_effect = [
@@ -239,24 +235,19 @@ class TestWaitForReplyTool:
 
     @patch("instagram_mcp.tools.messages.time.sleep")
     @patch("instagram_mcp.tools.messages.time.time")
-    def test_wait_for_reply_double_text(
-        self, mock_time: MagicMock, mock_sleep: MagicMock
-    ) -> None:
+    def test_wait_for_reply_double_text(self, mock_time: MagicMock, mock_sleep: MagicMock) -> None:
         """Test catching double texts within grace period."""
         time_values = iter([0, 0, 0, 3, 3, 8, 8, 15, 15])
         mock_time.side_effect = lambda: next(time_values)
 
         baseline_msg = self._create_message(
-            "100", "Hello", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "Hello", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         msg1 = self._create_message(
-            "101", "Hey!", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101", "Hey!", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 1, 0)
         )
         msg2 = self._create_message(
-            "102", "Also...", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 2, 0)
+            "102", "Also...", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 2, 0)
         )
 
         self.mock_client.get_messages.side_effect = [
@@ -291,8 +282,7 @@ class TestWaitForReplyTool:
         mock_time.side_effect = lambda: next(time_values)
 
         baseline_msg = self._create_message(
-            "100", "Hello", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "Hello", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         self.mock_client.get_messages.return_value = [baseline_msg]
 
@@ -309,16 +299,13 @@ class TestWaitForReplyTool:
 
     @patch("instagram_mcp.tools.messages.time.sleep")
     @patch("instagram_mcp.tools.messages.time.time")
-    def test_wait_for_reply_long_timeout(
-        self, mock_time: MagicMock, mock_sleep: MagicMock
-    ) -> None:
+    def test_wait_for_reply_long_timeout(self, mock_time: MagicMock, mock_sleep: MagicMock) -> None:
         """Test long timeout behavior (e.g., 120 minutes cooldown)."""
         time_values = iter([0, 0, 0, 3600, 7201])
         mock_time.side_effect = lambda: next(time_values)
 
         baseline_msg = self._create_message(
-            "100", "Hello", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "Hello", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         self.mock_client.get_messages.return_value = [baseline_msg]
 
@@ -344,18 +331,18 @@ class TestWaitForReplyTool:
         mock_time.side_effect = lambda: next(time_values)
 
         baseline_msg = self._create_message(
-            "100", "Hello", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "Hello", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         # Our follow-up has timestamp > baseline, but should be ignored (is_sent_by_viewer)
         our_msg = self._create_message(
-            "101", "Anyone there?", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101",
+            "Anyone there?",
+            is_sent_by_viewer=True,
+            timestamp=datetime(2024, 1, 15, 10, 1, 0),
         )
         # Their reply has timestamp > baseline, should be detected
         their_msg = self._create_message(
-            "102", "Yeah!", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 2, 0)
+            "102", "Yeah!", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 2, 0)
         )
 
         self.mock_client.get_messages.side_effect = [
@@ -477,18 +464,18 @@ class TestWaitForReplyTool:
 
         # Their first message at T0
         their_first_msg = self._create_message(
-            "100", "Hey!", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "Hey!", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         # Our response at T1 (this becomes our baseline)
         our_response = self._create_message(
-            "101", "Hi there!", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101", "Hi there!", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 1, 0)
         )
         # Their message at T2 > T1 (should be detected!)
         their_race_msg = self._create_message(
-            "102", "Also wanted to ask...", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 2, 0)
+            "102",
+            "Also wanted to ask...",
+            is_sent_by_viewer=False,
+            timestamp=datetime(2024, 1, 15, 10, 2, 0),
         )
 
         # When wait_for_reply is called, the thread already has all 3 messages
@@ -551,13 +538,11 @@ class TestSendAndCheckTool:
         """Test send_and_check when no interjection occurs."""
         # Setup: their last message before we send
         their_old_msg = self._create_message(
-            "100", "hey", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "hey", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         # Our sent message
         our_sent_msg = self._create_message(
-            "101", "what's up", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101", "what's up", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 1, 0)
         )
 
         # Mock reply_to_thread to return our message
@@ -586,25 +571,29 @@ class TestSendAndCheckTool:
         """Test send_and_check detects interjection from them."""
         # Their old message (baseline)
         their_old_msg = self._create_message(
-            "100", "hey", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "hey", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         # Our sent message
         our_sent_msg = self._create_message(
-            "101", "what's up", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101", "what's up", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 1, 0)
         )
         # Their interjection (sent AFTER our message)
         their_interjection = self._create_message(
-            "102", "wait hold on", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 1, 5)
+            "102",
+            "wait hold on",
+            is_sent_by_viewer=False,
+            timestamp=datetime(2024, 1, 15, 10, 1, 5),
         )
 
         self.mock_client.reply_to_thread.return_value = our_sent_msg
 
         self.mock_client.get_messages.side_effect = [
             [their_old_msg],  # Pre-send baseline
-            [their_interjection, our_sent_msg, their_old_msg],  # Sync - our msg + their interjection
+            [
+                their_interjection,
+                our_sent_msg,
+                their_old_msg,
+            ],  # Sync - our msg + their interjection
             [their_interjection, our_sent_msg, their_old_msg],  # Post-send check
         ]
 
@@ -620,12 +609,10 @@ class TestSendAndCheckTool:
     def test_send_and_check_sync_timeout(self, mock_sleep: MagicMock) -> None:
         """Test send_and_check handles sync timeout gracefully."""
         their_old_msg = self._create_message(
-            "100", "hey", is_sent_by_viewer=False,
-            timestamp=datetime(2024, 1, 15, 10, 0, 0)
+            "100", "hey", is_sent_by_viewer=False, timestamp=datetime(2024, 1, 15, 10, 0, 0)
         )
         our_sent_msg = self._create_message(
-            "101", "what's up", is_sent_by_viewer=True,
-            timestamp=datetime(2024, 1, 15, 10, 1, 0)
+            "101", "what's up", is_sent_by_viewer=True, timestamp=datetime(2024, 1, 15, 10, 1, 0)
         )
 
         self.mock_client.reply_to_thread.return_value = our_sent_msg

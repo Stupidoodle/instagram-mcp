@@ -131,14 +131,55 @@ class TestConvertMessage:
         assert msg.sender.user_id == "0"
         assert msg.sender.username == "unknown"
 
-    def test_convert_message_is_sent_by_viewer_none(
-        self, mock_ig_message: MagicMock
-    ) -> None:
+    def test_convert_message_is_sent_by_viewer_none(self, mock_ig_message: MagicMock) -> None:
         mock_ig_message.is_sent_by_viewer = None
 
         msg = _convert_message(mock_ig_message, "123456789")
 
         assert msg.is_sent_by_viewer is False
+
+    def test_convert_message_with_reactions(self, mock_ig_message: MagicMock) -> None:
+        """Emoji reactions from instagrapi should populate content.reactions."""
+        from datetime import datetime
+
+        # Set up mock reactions
+        mock_reaction = MagicMock()
+        mock_reaction.emoji = "😆"
+        mock_reaction.sender_id = 999999
+        mock_reaction.timestamp = datetime(2024, 1, 15, 10, 31, 0)
+
+        mock_reactions = MagicMock()
+        mock_reactions.emojis = [mock_reaction]
+        mock_reactions.likes = []
+
+        mock_ig_message.reactions = mock_reactions
+
+        msg = _convert_message(mock_ig_message, "123456789")
+
+        assert msg.content.reactions is not None
+        assert len(msg.content.reactions.emojis) == 1
+        assert msg.content.reactions.emojis[0].emoji == "😆"
+        assert msg.content.reactions.emojis[0].sender_id == "999999"
+        assert msg.content.reactions.emojis[0].timestamp == datetime(2024, 1, 15, 10, 31, 0)
+
+    def test_convert_message_no_reactions(self, mock_ig_message: MagicMock) -> None:
+        """No reactions on message should leave content.reactions as None."""
+        mock_ig_message.reactions = None
+
+        msg = _convert_message(mock_ig_message, "123456789")
+
+        assert msg.content.reactions is None
+
+    def test_convert_message_empty_emojis(self, mock_ig_message: MagicMock) -> None:
+        """Empty emojis list should leave content.reactions as None."""
+        mock_reactions = MagicMock()
+        mock_reactions.emojis = []
+
+        mock_ig_message.reactions = mock_reactions
+
+        msg = _convert_message(mock_ig_message, "123456789")
+
+        assert msg.content.reactions is None
 
 
 class TestConvertThread:
@@ -224,9 +265,7 @@ class TestInstagramClient:
 
         assert result is False
 
-    def test_load_session_success(
-        self, tmp_path: Path, mock_instagrapi_client: MagicMock
-    ) -> None:
+    def test_load_session_success(self, tmp_path: Path, mock_instagrapi_client: MagicMock) -> None:
         session_file = tmp_path / "session"
         session_data = {"authorization_data": {"sessionid": "test_session"}}
         session_file.write_text(json.dumps(session_data))
@@ -248,9 +287,7 @@ class TestInstagramClient:
         with pytest.raises(SessionError, match="Invalid session file format"):
             client.load_session()
 
-    def test_save_session(
-        self, tmp_path: Path, mock_instagrapi_client: MagicMock
-    ) -> None:
+    def test_save_session(self, tmp_path: Path, mock_instagrapi_client: MagicMock) -> None:
         session_file = tmp_path / "session"
 
         with patch("instagram_mcp.client.Client", return_value=mock_instagrapi_client):
@@ -261,9 +298,7 @@ class TestInstagramClient:
         # Check file permissions are restrictive
         assert (session_file.stat().st_mode & 0o777) == 0o600
 
-    def test_login_success(
-        self, tmp_path: Path, mock_instagrapi_client: MagicMock
-    ) -> None:
+    def test_login_success(self, tmp_path: Path, mock_instagrapi_client: MagicMock) -> None:
         with patch("instagram_mcp.client.Client", return_value=mock_instagrapi_client):
             client = InstagramClient(session_file=tmp_path / "session")
             client.login("test_user", "test_pass")
@@ -271,9 +306,7 @@ class TestInstagramClient:
         assert client.is_logged_in is True
         mock_instagrapi_client.login.assert_called_once_with("test_user", "test_pass")
 
-    def test_login_bad_password(
-        self, tmp_path: Path, mock_instagrapi_client: MagicMock
-    ) -> None:
+    def test_login_bad_password(self, tmp_path: Path, mock_instagrapi_client: MagicMock) -> None:
         mock_instagrapi_client.login.side_effect = BadPassword()
 
         with patch("instagram_mcp.client.Client", return_value=mock_instagrapi_client):
@@ -355,9 +388,7 @@ class TestInstagramClientThreadOperations:
         assert threads[0].thread_id == "123456789"
         instagram_client.client.direct_threads.assert_called_once_with(amount=10)
 
-    def test_get_thread(
-        self, instagram_client: InstagramClient, mock_ig_thread: MagicMock
-    ) -> None:
+    def test_get_thread(self, instagram_client: InstagramClient, mock_ig_thread: MagicMock) -> None:
         instagram_client.client.direct_thread.return_value = mock_ig_thread
 
         thread = instagram_client.get_thread("123456789", amount=20)
@@ -530,9 +561,7 @@ class TestInstagramClientMediaOperations:
     def test_share_profile(self, instagram_client: InstagramClient) -> None:
         instagram_client.client.direct_profile_share.return_value = True
 
-        result = instagram_client.share_profile(
-            "444444444", target_user_ids=["123"]
-        )
+        result = instagram_client.share_profile("444444444", target_user_ids=["123"])
 
         assert result is True
         instagram_client.client.direct_profile_share.assert_called_once()
@@ -566,5 +595,3 @@ class TestInteractiveLogin:
             interactive_login()
 
         assert exc_info.value.code == 1
-
-

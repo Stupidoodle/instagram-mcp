@@ -25,8 +25,10 @@ from instagrapi.types import User as IGUser
 from instagram_mcp.models.schemas import (
     DirectMessage,
     DirectThread,
+    EmojiReaction,
     MediaType,
     MessageContent,
+    Reactions,
     ThreadUser,
 )
 
@@ -133,9 +135,7 @@ def _fix_instagrapi_extractors() -> None:
             media = visual_media["media"]
             emas = media.get("expiring_media_action_summary")
             if emas and emas.get("timestamp"):
-                emas["timestamp"] = dt.datetime.fromtimestamp(
-                    int(emas["timestamp"]) // 1_000_000
-                )
+                emas["timestamp"] = dt.datetime.fromtimestamp(int(emas["timestamp"]) // 1_000_000)
             # Convert image candidates URL expiration timestamps
             img_versions = media.get("image_versions2")
             if img_versions:
@@ -157,9 +157,7 @@ def _fix_instagrapi_extractors() -> None:
         if visual_media:
             emas = visual_media.get("expiring_media_action_summary")
             if emas and emas.get("timestamp"):
-                emas["timestamp"] = dt.datetime.fromtimestamp(
-                    int(emas["timestamp"]) // 1_000_000
-                )
+                emas["timestamp"] = dt.datetime.fromtimestamp(int(emas["timestamp"]) // 1_000_000)
 
         # FIX: Extract action_log description to text field
         action_log = data.get("action_log")
@@ -273,6 +271,18 @@ def _convert_message(
         media_url=media_url,
         media_type=media_type,
     )
+
+    # Extract emoji reactions from the instagrapi message
+    if msg.reactions and msg.reactions.emojis:
+        emoji_list = [
+            EmojiReaction(
+                emoji=er.emoji,
+                sender_id=str(er.sender_id),
+                timestamp=er.timestamp,
+            )
+            for er in msg.reactions.emojis
+        ]
+        content.reactions = Reactions(emojis=emoji_list)
 
     # Look up user from thread's users, fall back to message's user info
     user_id = str(msg.user_id) if msg.user_id else "0"
