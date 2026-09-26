@@ -828,3 +828,69 @@ class TestMQTTManagerDisconnect:
 
         mgr.disconnect()
         assert mgr._reader_thread is None
+
+
+def _publish_body(text: str) -> tuple[int, bytes]:
+    """A QoS 1 PUBLISH on /ig_message_sync carrying one new message in thread T1."""
+    topic = b"146"
+    iris_data = [
+        {
+            "event": "patch",
+            "data": [
+                {
+                    "op": "add",
+                    "path": "/direct_v2/threads/T1/items/I1",
+                    "value": json.dumps(
+                        {"item_id": "I1", "user_id": 5, "text": text, "item_type": "text", "timestamp": "0"}
+                    ),
+                }
+            ],
+            "seq_id": 1,
+        }
+    ]
+    payload = zlib.compress(json.dumps(iris_data).encode())
+    return 0x32, struct.pack("!H", len(topic)) + topic + struct.pack("!H", 1) + payload
+
+
+class TestMQTTManagerListener:
+    def test_listener_receives_every_event(self) -> None:
+        mgr = MQTTManager()
+        mgr._conn = MagicMock()
+        received: list[MessageEvent] = []
+        mgr.set_listener(received.append)  # type: ignore[arg-type]
+
+        mgr._handle_publish(*_publish_body("pushed"))
+
+        assert len(received) == 1
+        assert received[0].text == "pushed"
+
+    def test_listener_failure_does_not_break_delivery(self) -> None:
+        mgr = MQTTManager()
+        mgr._conn = MagicMock()
+        mgr.set_listener(MagicMock(side_effect=RuntimeError("boom")))
+
+        mgr._handle_publish(*_publish_body("still routed"))
+
+        q = mgr.router.subscribe("T1")
+        assert q.get_nowait().text == "still routed"
+        mgr.router.unsubscribe("T1", q)
+
+
+class TestMQTTManagerWatchdog:
+    def test_watchdog_reconnects_until_disconnect(self) -> None:
+        mgr = MQTTManager()
+        mgr._conn = MagicMock()
+        calls = threading.Event()
+
+        def ensure() -> bool:
+            calls.set()
+            raise RuntimeError("still down")
+
+        with patch.object(mgr, "ensure_connected", side_effect=ensure):
+            mgr.start_watchdog(interval=0.01)
+            mgr.start_watchdog(interval=0.01)  # idempotent
+            assert calls.wait(1)
+            mgr.disconnect()
+            assert mgr._watchdog_thread is not None
+            mgr._watchdog_thread.join(1)
+            assert not mgr._watchdog_thread.is_alive()

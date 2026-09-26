@@ -137,3 +137,14 @@ class TestSetupLogging:
         # Handler should write to stderr, not stdout
         handler = logger.handlers[0]
         assert isinstance(handler, logging.StreamHandler)
+
+
+class TestSubscriptions:
+    def test_parse_aliases_and_bare_ids(self, mock_settings: Settings) -> None:
+        settings = mock_settings.model_copy(
+            update={"instagram_subscribe": "ly=111, 222 ,,mika = 333"}
+        )
+        assert settings.subscriptions() == [("ly", "111"), (None, "222"), ("mika", "333")]
+
+    def test_empty(self, mock_settings: Settings) -> None:
+        assert mock_settings.subscriptions() == []

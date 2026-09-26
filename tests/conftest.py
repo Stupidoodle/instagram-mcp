@@ -1,5 +1,6 @@
 """Shared pytest fixtures for Instagram MCP Server tests."""
 
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,13 @@ from instagram_mcp.models.schemas import (
     MessageContent,
     ThreadUser,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_live_mqtt() -> Iterator[MagicMock]:
+    """create_server() must never open a real MQTT connection in tests."""
+    with patch("instagram_mcp.server.MQTTManager") as manager_class:
+        yield manager_class
 
 
 @pytest.fixture

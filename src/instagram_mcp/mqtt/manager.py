@@ -21,6 +21,7 @@ from instagram_mcp.mqtt.thrift import build_connect_payload
 from instagram_mcp.mqtt.topics import SUB_IRIS
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 logger = logging.getLogger("instagram_mcp.mqtt")
@@ -36,6 +37,9 @@ _PINGREQ_RESPONSE_TIMEOUT = 15
 # Only matters if we somehow never send a PINGREQ (shouldn't happen).
 _STALE_TIMEOUT = 90
 
+# How often the watchdog checks the connection and reconnects a dead one.
+_WATCHDOG_INTERVAL = 10
+
 
 class MQTTManager:
     """Manages the persistent MQTT connection and event routing.
@@ -50,6 +54,9 @@ class MQTTManager:
     def __init__(self) -> None:
         self._conn = MQTToTConnection()
         self._router = EventRouter()
+        self._listener: Callable[[Event], None] | None = None
+        self._watchdog_thread: threading.Thread | None = None
+        self._watchdog_stop = threading.Event()
         self._reader_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._packet_id_counter = 1
@@ -112,6 +119,38 @@ class MQTTManager:
     def router(self) -> EventRouter:
         """Access the event router for direct subscription."""
         return self._router
+
+    def set_listener(self, listener: Callable[[Event], None] | None) -> None:
+        """Set a callback that receives every parsed event, on the reader thread.
+
+        It must not block. Events still go to the router as well.
+        """
+        self._listener = listener
+
+    def start_watchdog(self, interval: float = _WATCHDOG_INTERVAL) -> None:
+        """Start a daemon thread that reconnects the connection when it dies.
+
+        Without it a dead connection only recovers when a tool calls
+        ``ensure_connected()``, and pushed events would silently stop.
+        """
+        if self._watchdog_thread and self._watchdog_thread.is_alive():
+            return
+        self._watchdog_stop.clear()
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            args=(interval,),
+            name="mqtt-watchdog",
+            daemon=True,
+        )
+        self._watchdog_thread.start()
+
+    def _watchdog_loop(self, interval: float) -> None:
+        """Reconnect whenever the connection goes stale, until stopped."""
+        while not self._watchdog_stop.wait(interval):
+            try:
+                self.ensure_connected()
+            except Exception:
+                logger.exception("MQTT watchdog reconnect failed")
 
     def connect(
         self,
@@ -222,7 +261,8 @@ class MQTTManager:
                 return False
 
     def disconnect(self) -> None:
-        """Stop the reader thread and disconnect."""
+        """Stop the watchdog and reader threads and disconnect."""
+        self._watchdog_stop.set()
         self._stop_event.set()
         self._conn.disconnect()
         if self._reader_thread and self._reader_thread.is_alive():
@@ -393,7 +433,13 @@ class MQTTManager:
             logger.debug("Iris seq_id advanced: %d → %d", self._seq_id, seq_id)
             self._seq_id = seq_id
 
+        listener = self._listener
         for event in events:
+            if listener is not None:
+                try:
+                    listener(event)
+                except Exception:
+                    logger.exception("MQTT listener failed on %s", type(event).__name__)
             subs = self._router.active_threads
             delivered = self._router.deliver(event)
             if delivered > 0:
