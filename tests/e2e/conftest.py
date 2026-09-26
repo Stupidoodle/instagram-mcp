@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from instagram_mcp.client import InstagramClient
+from instagram_mcp.mqtt.events import Event
 from instagram_mcp.mqtt.manager import MQTTManager
 
 # Session file paths (resolved to project root)
@@ -129,6 +130,21 @@ def drain_queue(q: queue.SimpleQueue, timeout: float = 1.0) -> list:
         except queue.Empty:
             break
     return events
+
+
+def tap_events(manager: MQTTManager, thread_id: str) -> queue.SimpleQueue:
+    """Route one thread's MQTT events into a queue through the listener hook.
+
+    Replaces any previous listener; call ``manager.set_listener(None)`` when done.
+    """
+    q: queue.SimpleQueue = queue.SimpleQueue()
+
+    def listener(event: Event) -> None:
+        if event.thread_id == thread_id:
+            q.put(event)
+
+    manager.set_listener(listener)
+    return q
 
 
 @pytest.fixture(autouse=True)

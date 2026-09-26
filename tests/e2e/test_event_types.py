@@ -19,6 +19,7 @@ from instagram_mcp.mqtt.events import (
     ThreadEvent,
     UnsendEvent,
 )
+from tests.e2e.conftest import tap_events
 
 pytestmark = pytest.mark.e2e
 
@@ -27,10 +28,9 @@ def _subscribe_fresh(mqtt_manager, thread_id):
     """Subscribe and drain stale events."""
     from tests.e2e.conftest import drain_queue
 
-    q = mqtt_manager.router.subscribe(thread_id)
+    q = tap_events(mqtt_manager, thread_id)
     drain_queue(q, timeout=2)
-    mqtt_manager.router.unsubscribe(thread_id, q)
-    return mqtt_manager.router.subscribe(thread_id)
+    return q
 
 
 class TestSeenEvents:
@@ -75,7 +75,7 @@ class TestSeenEvents:
                 if events:
                     break
 
-        mqtt_manager.router.unsubscribe(shared_thread_id, q)
+        mqtt_manager.set_listener(None)
 
         # We expect at minimum a self-echo MessageEvent. SeenEvent may or
         # may not arrive depending on Instagram's push timing.
@@ -132,7 +132,7 @@ class TestUnsendEvents:
                 if events_after:
                     break
 
-        mqtt_manager.router.unsubscribe(shared_thread_id, q)
+        mqtt_manager.set_listener(None)
 
         # We should have at least gotten the message event before delete
         msg_events = [e for e in events_before if isinstance(e, MessageEvent)]
@@ -189,7 +189,7 @@ class TestThreadEvents:
                 if len(events) >= 3:
                     break
 
-        mqtt_manager.router.unsubscribe(shared_thread_id, q)
+        mqtt_manager.set_listener(None)
 
         # Should have at least 3 MessageEvents (2 from bot2 + 1 self-echo)
         msg_events = [e for e in events if isinstance(e, MessageEvent)]
@@ -198,54 +198,3 @@ class TestThreadEvents:
             f"{[(e.user_id, e.text) for e in msg_events]}"
         )
 
-
-class TestConnectionResilience:
-    """Test that the MQTT connection handles edge cases gracefully."""
-
-    def test_rapid_subscribe_unsubscribe(
-        self,
-        mqtt_manager,
-        shared_thread_id,
-    ):
-        """Rapidly subscribing and unsubscribing doesn't crash."""
-        for _ in range(10):
-            q = mqtt_manager.router.subscribe(shared_thread_id)
-            mqtt_manager.router.unsubscribe(shared_thread_id, q)
-
-    def test_multiple_concurrent_subscribers(
-        self,
-        mqtt_manager,
-        bot2_client,
-        shared_thread_id,
-    ):
-        """Two subscribers on same thread both receive the event."""
-        marker = f"e2e-multi-sub-{uuid.uuid4().hex[:8]}"
-
-        q1 = _subscribe_fresh(mqtt_manager, shared_thread_id)
-        q2 = mqtt_manager.router.subscribe(shared_thread_id)
-
-        bot2_client.reply_to_thread(
-            thread_id=shared_thread_id,
-            text=f"dual sub {marker}",
-        )
-        time.sleep(5)
-
-        events1 = []
-        events2 = []
-        try:
-            while True:
-                events1.append(q1.get(timeout=1))
-        except queue.Empty:
-            pass
-        try:
-            while True:
-                events2.append(q2.get(timeout=1))
-        except queue.Empty:
-            pass
-
-        mqtt_manager.router.unsubscribe(shared_thread_id, q1)
-        mqtt_manager.router.unsubscribe(shared_thread_id, q2)
-
-        # Both should have received the message
-        assert len(events1) >= 1
-        assert len(events2) >= 1

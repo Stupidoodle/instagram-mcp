@@ -98,7 +98,7 @@ class TestMQTTManagerLifecycle:
 
 class TestMQTTManagerReaderLoop:
     def test_handles_publish_packet(self) -> None:
-        """Reader loop parses PUBLISH and delivers events to router."""
+        """Reader loop parses PUBLISH and hands events to the listener."""
         mgr = MQTTManager()
 
         # Build a fake PUBLISH packet body (topic 146, QoS 1)
@@ -131,21 +131,17 @@ class TestMQTTManagerReaderLoop:
 
         first_byte = 0x32  # PUBLISH QoS 1
 
-        # Subscribe to thread T1
-        q = mgr.router.subscribe("T1")
+        received: list[MessageEvent] = []
+        mgr.set_listener(received.append)  # type: ignore[arg-type]
 
         # Call the handler directly
         mgr._handle_publish(first_byte, body)
 
-        # Should have delivered the event
-        assert not q.empty()
-        event = q.get_nowait()
+        (event,) = received
         assert isinstance(event, MessageEvent)
         assert event.thread_id == "T1"
         assert event.text == "hey"
         assert event.user_id == 99
-
-        mgr.router.unsubscribe("T1", q)
 
     def test_handles_pingreq(self) -> None:
         """Reader loop responds to PINGREQ with PINGRESP."""
@@ -180,134 +176,6 @@ class TestMQTTManagerReaderLoop:
 
         # Should exit quickly since is_connected is False
         mgr._reader_loop()
-
-
-class TestMQTTManagerWaitForMessage:
-    def test_returns_message_event(self) -> None:
-        """wait_for_message returns when a MessageEvent arrives."""
-        mgr = MQTTManager()
-        mock_conn = MagicMock()
-        mock_conn.is_connected = True
-        mgr._conn = mock_conn
-        mgr._stop_event.clear()
-
-        event = MessageEvent(
-            thread_id="T1",
-            item_id="I1",
-            user_id=5,
-            text="hello",
-            item_type="text",
-            timestamp=0,
-        )
-
-        # Deliver event from another thread after a short delay
-        def deliver() -> None:
-            time.sleep(0.05)
-            mgr.router.deliver(event)
-
-        t = threading.Thread(target=deliver)
-        t.start()
-
-        result = mgr.wait_for_message("T1", timeout=5)
-        t.join()
-        assert result is event
-
-    def test_returns_none_on_timeout(self) -> None:
-        """wait_for_message returns None when timeout expires."""
-        mgr = MQTTManager()
-        mock_conn = MagicMock()
-        mock_conn.is_connected = True
-        mgr._conn = mock_conn
-        mgr._stop_event.clear()
-
-        result = mgr.wait_for_message("T1", timeout=0.1)
-        assert result is None
-
-    def test_returns_none_when_disconnected(self) -> None:
-        """wait_for_message returns None if connection is lost."""
-        mgr = MQTTManager()
-        mock_conn = MagicMock()
-        mock_conn.is_connected = False
-        mgr._conn = mock_conn
-
-        result = mgr.wait_for_message("T1", timeout=5)
-        assert result is None
-
-    def test_skips_non_message_events(self) -> None:
-        """wait_for_message ignores SeenEvent etc., only returns MessageEvent."""
-        from instagram_mcp.mqtt.events import SeenEvent
-
-        mgr = MQTTManager()
-        mock_conn = MagicMock()
-        mock_conn.is_connected = True
-        mgr._conn = mock_conn
-        mgr._stop_event.clear()
-
-        seen = SeenEvent(thread_id="T1", user_id=2, item_id="I1", timestamp=100)
-        msg = MessageEvent(
-            thread_id="T1",
-            item_id="I2",
-            user_id=3,
-            text="hi",
-            item_type="text",
-            timestamp=200,
-        )
-
-        def deliver() -> None:
-            time.sleep(0.05)
-            mgr.router.deliver(seen)
-            time.sleep(0.05)
-            mgr.router.deliver(msg)
-
-        t = threading.Thread(target=deliver)
-        t.start()
-
-        result = mgr.wait_for_message("T1", timeout=5)
-        t.join()
-        assert result is msg
-
-
-class TestMQTTManagerCollectEvents:
-    def test_collects_within_window(self) -> None:
-        """collect_events gathers events during the time window."""
-        mgr = MQTTManager()
-
-        event1 = MessageEvent(
-            thread_id="T1",
-            item_id="I1",
-            user_id=1,
-            text="a",
-            item_type="text",
-            timestamp=0,
-        )
-        event2 = MessageEvent(
-            thread_id="T1",
-            item_id="I2",
-            user_id=1,
-            text="b",
-            item_type="text",
-            timestamp=1,
-        )
-
-        def deliver() -> None:
-            time.sleep(0.02)
-            mgr.router.deliver(event1)
-            time.sleep(0.02)
-            mgr.router.deliver(event2)
-
-        t = threading.Thread(target=deliver)
-        t.start()
-
-        events = mgr.collect_events("T1", window=0.5)
-        t.join()
-        assert len(events) == 2
-        assert events[0] is event1
-        assert events[1] is event2
-
-    def test_empty_on_no_events(self) -> None:
-        mgr = MQTTManager()
-        events = mgr.collect_events("T1", window=0.1)
-        assert events == []
 
 
 class TestMQTTManagerPublish:
@@ -545,17 +413,6 @@ class TestMQTTManagerStaleDetection:
         finally:
             manager_mod._KEEPALIVE_INTERVAL = original
 
-    def test_wait_for_message_returns_none_when_stale(self) -> None:
-        """wait_for_message exits early if connection goes stale mid-wait."""
-        mgr = MQTTManager()
-        mock_conn = MagicMock()
-        mock_conn.is_connected = False
-        mgr._conn = mock_conn
-
-        result = mgr.wait_for_message("T1", timeout=1)
-        assert result is None
-
-
 class TestMQTTManagerReaderLoopPacketTypes:
     """Tests for handling different MQTT packet types in the reader loop."""
 
@@ -718,79 +575,6 @@ class TestMQTTManagerReaderLoopPacketTypes:
         mgr._handle_publish(first_byte, body)
         mock_conn.send_puback.assert_not_called()
 
-    def test_handle_publish_event_delivered_to_subscriber(self) -> None:
-        """Event from PUBLISH is delivered to the correct thread subscriber."""
-        mgr = MQTTManager()
-        mock_conn = MagicMock()
-        mgr._conn = mock_conn
-
-        topic = b"146"
-        iris_data = [
-            {
-                "event": "patch",
-                "data": [
-                    {
-                        "op": "add",
-                        "path": "/direct_v2/threads/T1/items/I1",
-                        "value": json.dumps(
-                            {"item_id": "I1", "user_id": 5, "text": "yo", "item_type": "text", "timestamp": "0"}
-                        ),
-                    }
-                ],
-                "seq_id": 1,
-            }
-        ]
-        payload = zlib.compress(json.dumps(iris_data).encode())
-        body = struct.pack("!H", len(topic)) + topic + struct.pack("!H", 1) + payload
-        first_byte = 0x32
-
-        q = mgr.router.subscribe("T1")
-        mgr._handle_publish(first_byte, body)
-
-        assert not q.empty()
-        event = q.get_nowait()
-        assert isinstance(event, MessageEvent)
-        assert event.text == "yo"
-        mgr.router.unsubscribe("T1", q)
-
-    def test_handle_publish_event_dropped_no_subscribers(self) -> None:
-        """Event with no subscribers is buffered, not lost."""
-        mgr = MQTTManager()
-        mock_conn = MagicMock()
-        mgr._conn = mock_conn
-
-        topic = b"146"
-        iris_data = [
-            {
-                "event": "patch",
-                "data": [
-                    {
-                        "op": "add",
-                        "path": "/direct_v2/threads/T1/items/I1",
-                        "value": json.dumps(
-                            {"item_id": "I1", "user_id": 5, "text": "buffered", "item_type": "text", "timestamp": "0"}
-                        ),
-                    }
-                ],
-                "seq_id": 1,
-            }
-        ]
-        payload = zlib.compress(json.dumps(iris_data).encode())
-        body = struct.pack("!H", len(topic)) + topic + struct.pack("!H", 1) + payload
-        first_byte = 0x32
-
-        # No subscribers — event should go to replay buffer
-        mgr._handle_publish(first_byte, body)
-
-        # Now subscribe and drain buffer
-        q = mgr.router.subscribe("T1")
-        assert not q.empty()
-        event = q.get_nowait()
-        assert isinstance(event, MessageEvent)
-        assert event.text == "buffered"
-        mgr.router.unsubscribe("T1", q)
-
-
 class TestMQTTManagerDisconnect:
     """Tests for disconnect edge cases."""
 
@@ -866,18 +650,6 @@ class TestMQTTManagerListener:
         assert len(received) == 1
         assert received[0].text == "pushed"
 
-    def test_listener_failure_does_not_break_delivery(self) -> None:
-        mgr = MQTTManager()
-        mgr._conn = MagicMock()
-        mgr.set_listener(MagicMock(side_effect=RuntimeError("boom")))
-
-        mgr._handle_publish(*_publish_body("still routed"))
-
-        q = mgr.router.subscribe("T1")
-        assert q.get_nowait().text == "still routed"
-        mgr.router.unsubscribe("T1", q)
-
-
 class TestMQTTManagerWatchdog:
     def test_watchdog_reconnects_until_disconnect(self) -> None:
         mgr = MQTTManager()
@@ -915,3 +687,16 @@ class TestMQTTManagerTyping:
         mgr = MQTTManager()
         with patch.object(mgr, "ensure_connected", return_value=False), pytest.raises(RuntimeError):
             mgr.indicate_activity("T1")
+
+
+class TestMQTTManagerListenerFailure:
+    def test_listener_failure_is_logged_not_raised(self) -> None:
+        mgr = MQTTManager()
+        mgr._conn = MagicMock()
+        mgr.set_listener(MagicMock(side_effect=RuntimeError("boom")))
+        mgr._handle_publish(*_publish_body("x"))
+
+    def test_no_listener_drops_events(self) -> None:
+        mgr = MQTTManager()
+        mgr._conn = MagicMock()
+        mgr._handle_publish(*_publish_body("x"))

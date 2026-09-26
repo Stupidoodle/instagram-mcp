@@ -1,7 +1,7 @@
 """Instagram MQTToT realtime messaging module.
 
-Provides push-based message reception via Instagram's MQTT infrastructure,
-replacing REST polling with <100ms event delivery.
+Receives DM events over Instagram's MQTT connection within ~100ms and hands
+them to a listener; nothing polls.
 """
 
 from instagram_mcp.mqtt.events import (
@@ -14,11 +14,9 @@ from instagram_mcp.mqtt.events import (
     UnsendEvent,
 )
 from instagram_mcp.mqtt.manager import MQTTManager
-from instagram_mcp.mqtt.router import EventRouter
 
 __all__ = [
     "Event",
-    "EventRouter",
     "MQTTManager",
     "MessageEvent",
     "ReactionEvent",

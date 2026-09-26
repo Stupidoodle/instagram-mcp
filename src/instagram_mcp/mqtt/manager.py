@@ -1,29 +1,29 @@
 """MQTT Manager — singleton lifecycle for the persistent MQTT connection.
 
-Owns the connection, reader thread, and event router. Tool calls delegate
-to this class for push-based message reception.
+Owns the connection, the reader thread and a watchdog that reconnects a dead
+connection. Every parsed event goes to one listener (the Claude Code channel),
+which pushes it into the live session; nothing waits or polls for replies.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import queue
 import threading
 import time
 import uuid
 from typing import TYPE_CHECKING
 
 from instagram_mcp.mqtt.connection import PINGREQ, PINGRESP, PUBACK, PUBLISH, MQTToTConnection
-from instagram_mcp.mqtt.events import Event, MessageEvent
 from instagram_mcp.mqtt.parser import parse_payload, parse_publish_packet
-from instagram_mcp.mqtt.router import EventRouter
 from instagram_mcp.mqtt.thrift import build_connect_payload
 from instagram_mcp.mqtt.topics import SEND_MESSAGE, SUB_IRIS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
+
+    from instagram_mcp.mqtt.events import Event
 
 logger = logging.getLogger("instagram_mcp.mqtt")
 
@@ -43,18 +43,16 @@ _WATCHDOG_INTERVAL = 10
 
 
 class MQTTManager:
-    """Manages the persistent MQTT connection and event routing.
+    """Manages the persistent MQTT connection and event delivery.
 
-    Thread-safe. The reader loop runs in a daemon thread and delivers
-    events via the EventRouter to per-thread subscriber queues.
-
-    Supports auto-reconnect: stores connection parameters so that
-    ``ensure_connected()`` can transparently recover from dead connections.
+    Thread-safe. The reader loop runs in a daemon thread and hands every
+    event to the listener set with ``set_listener()``. Connection parameters
+    are stored so ``ensure_connected()`` (called by the watchdog) can
+    transparently recover from dead connections.
     """
 
     def __init__(self) -> None:
         self._conn = MQTToTConnection()
-        self._router = EventRouter()
         self._listener: Callable[[Event], None] | None = None
         self._watchdog_thread: threading.Thread | None = None
         self._watchdog_stop = threading.Event()
@@ -116,15 +114,10 @@ class MQTTManager:
         """Number of auto-reconnections since initial connect."""
         return self._reconnect_count
 
-    @property
-    def router(self) -> EventRouter:
-        """Access the event router for direct subscription."""
-        return self._router
-
     def set_listener(self, listener: Callable[[Event], None] | None) -> None:
-        """Set a callback that receives every parsed event, on the reader thread.
+        """Set the callback that receives every parsed event, on the reader thread.
 
-        It must not block. Events still go to the router as well.
+        It must not block.
         """
         self._listener = listener
 
@@ -292,71 +285,6 @@ class MQTTManager:
             self._reader_thread.join(timeout=5)
         self._reader_thread = None
 
-    def wait_for_message(
-        self,
-        thread_id: str,
-        timeout: float = 300,
-    ) -> MessageEvent | None:
-        """Wait for a new message in a specific thread.
-
-        Args:
-            thread_id: The Instagram thread ID to listen for.
-            timeout: Maximum seconds to wait.
-
-        Returns:
-            The first MessageEvent received, or None on timeout.
-        """
-        q = self._router.subscribe(thread_id)
-        try:
-            deadline = time.monotonic() + timeout
-            while time.monotonic() < deadline:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                try:
-                    event = q.get(timeout=min(remaining, 1.0))
-                    if isinstance(event, MessageEvent):
-                        return event
-                except queue.Empty:
-                    if not self.is_connected:
-                        return None
-        finally:
-            self._router.unsubscribe(thread_id, q)
-        return None
-
-    def collect_events(
-        self,
-        thread_id: str,
-        window: float = 10.0,
-    ) -> list[Event]:
-        """Collect all events for a thread within a time window.
-
-        Used for grace periods (catching double-texts after first reply).
-
-        Args:
-            thread_id: The Instagram thread ID.
-            window: Seconds to keep collecting events.
-
-        Returns:
-            List of events received during the window.
-        """
-        q = self._router.subscribe(thread_id)
-        events: list[Event] = []
-        try:
-            deadline = time.monotonic() + window
-            while time.monotonic() < deadline:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                try:
-                    event = q.get(timeout=min(remaining, 0.5))
-                    events.append(event)
-                except queue.Empty:
-                    pass
-        finally:
-            self._router.unsubscribe(thread_id, q)
-        return events
-
     def _reader_loop(self) -> None:  # noqa: PLR0912
         """Background thread: read MQTT packets, parse, route events."""
         last_ping = time.monotonic()
@@ -458,27 +386,13 @@ class MQTTManager:
 
         listener = self._listener
         for event in events:
-            if listener is not None:
-                try:
-                    listener(event)
-                except Exception:
-                    logger.exception("MQTT listener failed on %s", type(event).__name__)
-            subs = self._router.active_threads
-            delivered = self._router.deliver(event)
-            if delivered > 0:
-                logger.info(
-                    "MQTT event: %s → thread %s (%d subscriber(s))",
-                    type(event).__name__,
-                    event.thread_id,
-                    delivered,
-                )
-            else:
-                logger.info(
-                    "MQTT event: %s → thread %s (dropped, no subscribers; active=%s)",
-                    type(event).__name__,
-                    event.thread_id,
-                    subs,
-                )
+            logger.debug("MQTT event: %s → thread %s", type(event).__name__, event.thread_id)
+            if listener is None:
+                continue
+            try:
+                listener(event)
+            except Exception:
+                logger.exception("MQTT listener failed on %s", type(event).__name__)
 
     def _publish(self, topic_id: int, payload: dict) -> None:
         """Publish to an MQTT topic with auto-incrementing packet ID."""

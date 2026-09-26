@@ -26,30 +26,39 @@ class TestServerIntegration:
 
             mcp = create_server(mock_settings)
 
-            # Check that all expected tools are registered
-            tool_names = [tool.name for tool in mcp._tool_manager._tools.values()]
+            tool_names = {tool.name for tool in mcp._tool_manager._tools.values()}
 
-            # Thread tools
-            assert "list_threads" in tool_names
-            assert "get_thread" in tool_names
-            assert "search_threads" in tool_names
-            assert "get_pending_threads" in tool_names
-            assert "hide_thread" in tool_names
-            assert "mark_thread_unread" in tool_names
-            assert "mute_thread" in tool_names
-            assert "unmute_thread" in tool_names
-
-            # Message tools
-            assert "send_message" in tool_names
-            assert "reply_to_thread" in tool_names
-            assert "get_messages" in tool_names
-            assert "delete_message" in tool_names
-
-            # Media tools
-            assert "send_photo" in tool_names
-            assert "send_video" in tool_names
-            assert "share_media" in tool_names
-            assert "share_profile" in tool_names
+        assert tool_names == {
+            # Reading
+            "list_threads",
+            "get_thread",
+            "search_threads",
+            "get_pending_threads",
+            "get_messages",
+            "get_chat_log",
+            # Inbox
+            "hide_thread",
+            "mark_thread_unread",
+            "mute_thread",
+            "unmute_thread",
+            # Sharing
+            "share_media",
+            "share_profile",
+            # Channel (same names as the WhatsApp channel)
+            "subscribe",
+            "unsubscribe",
+            "list_subscriptions",
+            "set_idle",
+            "reply",
+            "send_file",
+            "send_audio",
+            "send_typing",
+            "mark_read",
+            "download_attachment",
+            "get_message_ids",
+            "unsend",
+            "react",
+        }
 
     def test_server_metadata(self, mock_settings: Settings) -> None:
         """Test that server metadata is correctly set."""
@@ -92,10 +101,7 @@ class TestToolRegistration:
         register_message_tools(mcp, mock_client)
 
         tool_names = [tool.name for tool in mcp._tool_manager._tools.values()]
-        assert "send_message" in tool_names
-        assert "reply_to_thread" in tool_names
-        assert "get_messages" in tool_names
-        assert "delete_message" in tool_names
+        assert tool_names == ["get_messages", "get_chat_log"]
 
     def test_register_media_tools(self) -> None:
         """Test media tools registration."""
@@ -105,10 +111,7 @@ class TestToolRegistration:
         register_media_tools(mcp, mock_client)
 
         tool_names = [tool.name for tool in mcp._tool_manager._tools.values()]
-        assert "send_photo" in tool_names
-        assert "send_video" in tool_names
-        assert "share_media" in tool_names
-        assert "share_profile" in tool_names
+        assert tool_names == ["share_media", "share_profile"]
 
 
 class TestToolDocstrings:

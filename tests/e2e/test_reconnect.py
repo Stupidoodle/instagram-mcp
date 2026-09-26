@@ -13,6 +13,7 @@ import pytest
 
 from instagram_mcp.mqtt.events import MessageEvent
 from instagram_mcp.mqtt.manager import MQTTManager
+from tests.e2e.conftest import tap_events
 
 pytestmark = pytest.mark.e2e
 
@@ -86,7 +87,7 @@ class TestAutoReconnect:
         # Prove it works: bot2 sends a message, we receive it via MQTT
         marker = f"e2e-reconnect-{uuid.uuid4().hex[:8]}"
 
-        q = mgr.router.subscribe(shared_thread_id)
+        q = tap_events(mgr, shared_thread_id)
         bot2_client.reply_to_thread(
             thread_id=shared_thread_id,
             text=f"after reconnect {marker}",
@@ -104,7 +105,7 @@ class TestAutoReconnect:
             except Exception:
                 pass
 
-        mgr.router.unsubscribe(shared_thread_id, q)
+        mgr.set_listener(None)
         mgr.disconnect()
 
         assert event is not None, f"Message with marker {marker} never arrived after reconnect"
