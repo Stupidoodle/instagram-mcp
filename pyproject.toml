@@ -23,7 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "instagrapi>=2.2.1",
-    "mcp[cli]>=1.26.0",
+    "mcp[cli]>=2.2.0",
     "paho-mqtt>=2.1.0",
     "pydantic>=2.11.7",
     "pydantic-settings>=2.12.0",

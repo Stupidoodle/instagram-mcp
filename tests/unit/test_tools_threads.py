@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from instagram_mcp.client import InstagramClient
 from instagram_mcp.models.schemas import DirectThread
@@ -12,7 +12,7 @@ from instagram_mcp.tools.threads import register_thread_tools
 class TestThreadTools:
     def setup_method(self) -> None:
         """Set up test fixtures."""
-        self.mcp = FastMCP("test")
+        self.mcp = MCPServer("test")
         self.mock_client = MagicMock(spec=InstagramClient)
         register_thread_tools(self.mcp, self.mock_client)
 

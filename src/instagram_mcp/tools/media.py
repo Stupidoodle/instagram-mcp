@@ -9,18 +9,18 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
     from instagram_mcp.client import InstagramClient
 
 logger = logging.getLogger("instagram_mcp")
 
 
-def register_media_tools(mcp: "FastMCP", client: "InstagramClient") -> None:
+def register_media_tools(mcp: "MCPServer", client: "InstagramClient") -> None:
     """Register media messaging tools with the MCP server.
 
     Args:
-        mcp: FastMCP server instance.
+        mcp: MCP server instance.
         client: Instagram client instance.
     """
 

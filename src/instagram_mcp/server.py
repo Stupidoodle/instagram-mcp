@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import sys
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from instagram_mcp.client import AuthenticationError, InstagramClient, SessionError
 from instagram_mcp.config import Settings, get_settings, setup_logging
@@ -20,19 +20,19 @@ from instagram_mcp.tools import (
 )
 
 # Global instances
-_mcp: FastMCP | None = None
+_mcp: MCPServer | None = None
 _client: InstagramClient | None = None
 _mqtt_manager: MQTTManager | None = None
 
 
-def create_server(settings: Settings | None = None) -> FastMCP:
+def create_server(settings: Settings | None = None) -> MCPServer:
     """Create and configure the MCP server.
 
     Args:
         settings: Optional settings instance. If not provided, loads from environment.
 
     Returns:
-        FastMCP: Configured MCP server instance.
+        MCPServer: Configured MCP server instance.
 
     Raises:
         AuthenticationError: If Instagram authentication fails.
@@ -46,7 +46,7 @@ def create_server(settings: Settings | None = None) -> FastMCP:
     logger = setup_logging(settings.log_level)
 
     # Initialize MCP server
-    _mcp = FastMCP("instagram-mcp")
+    _mcp = MCPServer("instagram-mcp")
 
     # Initialize Instagram client
     _client = InstagramClient(
@@ -94,11 +94,11 @@ def create_server(settings: Settings | None = None) -> FastMCP:
     return _mcp
 
 
-def get_mcp() -> FastMCP:
+def get_mcp() -> MCPServer:
     """Get the current MCP server instance.
 
     Returns:
-        FastMCP: The MCP server instance.
+        MCPServer: The MCP server instance.
 
     Raises:
         RuntimeError: If server hasn't been created yet.

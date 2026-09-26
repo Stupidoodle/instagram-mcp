@@ -6,7 +6,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from instagram_mcp.client import InstagramClient
 from instagram_mcp.config import Settings
@@ -180,9 +180,9 @@ def instagram_client(mock_instagrapi_client: MagicMock, tmp_path: Path) -> Insta
 
 
 @pytest.fixture
-def mock_mcp() -> FastMCP:
-    """Create a mock FastMCP server for testing tools."""
-    return FastMCP("test-server")
+def mock_mcp() -> MCPServer:
+    """Create an MCP server for testing tools."""
+    return MCPServer("test-server")
 
 
 def create_mock_tool_context() -> dict[str, Any]:

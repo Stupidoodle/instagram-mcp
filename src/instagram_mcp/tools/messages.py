@@ -12,6 +12,8 @@ import queue as queue_mod
 import time
 from typing import TYPE_CHECKING, Any
 
+from mcp.types import ToolAnnotations
+
 from instagram_mcp.models.schemas import MediaType
 from instagram_mcp.mqtt.events import (
     MessageEvent,
@@ -22,7 +24,7 @@ from instagram_mcp.mqtt.events import (
 )
 
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
     from instagram_mcp.client import InstagramClient
 
@@ -286,7 +288,7 @@ def _send_and_check_mqtt(
     return result
 
 
-def register_message_tools(mcp: FastMCP, client: InstagramClient) -> None:
+def register_message_tools(mcp: MCPServer, client: InstagramClient) -> None:
     """Register message operation tools with the MCP server."""
 
     @mcp.tool()
@@ -352,7 +354,7 @@ def register_message_tools(mcp: FastMCP, client: InstagramClient) -> None:
             logger.exception("Error replying to thread %s", thread_id)
             return {"error": str(e), "thread_id": thread_id}
 
-    @mcp.tool(annotations={"destructive": True})
+    @mcp.tool(annotations=ToolAnnotations(destructive_hint=True))
     def send_and_check(
         thread_id: str,
         text: str,
@@ -529,7 +531,7 @@ def register_message_tools(mcp: FastMCP, client: InstagramClient) -> None:
             logger.exception("Error getting chat log for thread %s", thread_id)
             return {"error": str(e), "thread_id": thread_id}
 
-    @mcp.tool(annotations={"destructive": True})
+    @mcp.tool(annotations=ToolAnnotations(destructive_hint=True))
     def delete_message(thread_id: str, message_id: str) -> dict[str, Any]:
         """Delete a message from a thread.
 

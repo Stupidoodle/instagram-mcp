@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from instagram_mcp.config import Settings
 from instagram_mcp.server import create_server
@@ -69,7 +69,7 @@ class TestServerIntegration:
 class TestToolRegistration:
     def test_register_thread_tools(self) -> None:
         """Test thread tools registration."""
-        mcp = FastMCP("test")
+        mcp = MCPServer("test")
         mock_client = MagicMock()
 
         register_thread_tools(mcp, mock_client)
@@ -86,7 +86,7 @@ class TestToolRegistration:
 
     def test_register_message_tools(self) -> None:
         """Test message tools registration."""
-        mcp = FastMCP("test")
+        mcp = MCPServer("test")
         mock_client = MagicMock()
 
         register_message_tools(mcp, mock_client)
@@ -99,7 +99,7 @@ class TestToolRegistration:
 
     def test_register_media_tools(self) -> None:
         """Test media tools registration."""
-        mcp = FastMCP("test")
+        mcp = MCPServer("test")
         mock_client = MagicMock()
 
         register_media_tools(mcp, mock_client)

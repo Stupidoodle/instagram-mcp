@@ -3,7 +3,7 @@
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from instagram_mcp.client import InstagramClient
 from instagram_mcp.models.schemas import (
@@ -18,7 +18,7 @@ from instagram_mcp.tools.messages import register_message_tools
 class TestMessageTools:
     def setup_method(self) -> None:
         """Set up test fixtures."""
-        self.mcp = FastMCP("test")
+        self.mcp = MCPServer("test")
         self.mock_client = MagicMock(spec=InstagramClient)
         register_message_tools(self.mcp, self.mock_client)
 
@@ -171,7 +171,7 @@ class TestWaitForReplyTool:
 
     def setup_method(self) -> None:
         """Set up test fixtures."""
-        self.mcp = FastMCP("test")
+        self.mcp = MCPServer("test")
         self.mock_client = MagicMock(spec=InstagramClient)
         register_message_tools(self.mcp, self.mock_client)
 
@@ -245,7 +245,7 @@ class TestSendAndCheckTool:
 
     def setup_method(self) -> None:
         """Set up test fixtures."""
-        self.mcp = FastMCP("test")
+        self.mcp = MCPServer("test")
         self.mock_client = MagicMock(spec=InstagramClient)
         register_message_tools(self.mcp, self.mock_client)
 
@@ -330,7 +330,7 @@ class TestGetChatLogTool:
 
     def setup_method(self) -> None:
         """Set up test fixtures."""
-        self.mcp = FastMCP("test")
+        self.mcp = MCPServer("test")
         self.mock_client = MagicMock(spec=InstagramClient)
         register_message_tools(self.mcp, self.mock_client)
 
@@ -503,7 +503,7 @@ class TestGetMessagesOffset:
 
     def setup_method(self) -> None:
         """Set up test fixtures."""
-        self.mcp = FastMCP("test")
+        self.mcp = MCPServer("test")
         self.mock_client = MagicMock(spec=InstagramClient)
         register_message_tools(self.mcp, self.mock_client)
 
@@ -910,9 +910,7 @@ class TestSendAndCheckMQTT:
 
         t = threading.Thread(target=deliver)
         t.start()
-        result = _send_and_check_mqtt(
-            mqtt, q, "T1", user_map={"42": "shaina"}
-        )
+        result = _send_and_check_mqtt(mqtt, q, "T1", user_map={"42": "shaina"})
         t.join()
 
         assert result["interjection"]["sender"] == "shaina"
@@ -927,7 +925,12 @@ class TestSendAndCheckMQTT:
         mqtt = self._make_mqtt()
         q = mqtt.router.subscribe("T1")
         self_echo = MessageEvent(
-            thread_id="T1", item_id="I1", user_id=999, text="my msg", item_type="text", timestamp=1000
+            thread_id="T1",
+            item_id="I1",
+            user_id=999,
+            text="my msg",
+            item_type="text",
+            timestamp=1000,
         )
 
         def deliver() -> None:
@@ -938,9 +941,7 @@ class TestSendAndCheckMQTT:
 
         t = threading.Thread(target=deliver)
         t.start()
-        result = _send_and_check_mqtt(
-            mqtt, q, "T1", self_user_id="999"
-        )
+        result = _send_and_check_mqtt(mqtt, q, "T1", self_user_id="999")
         t.join()
 
         assert result["has_interjection"] is False
