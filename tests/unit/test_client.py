@@ -1,6 +1,7 @@
 """Unit tests for Instagram client wrapper."""
 
 import json
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +9,7 @@ import pytest
 from instagrapi.exceptions import BadPassword, ChallengeRequired, TwoFactorRequired
 
 from instagram_mcp.client import (
+    InstagramClientError,
     AuthenticationError,
     InstagramClient,
     SessionError,
@@ -738,3 +740,117 @@ class TestRetryOnRateLimit:
 
         assert messages == []
         assert instagram_client.client.direct_thread.call_count == 2
+
+
+def _ig_message(mid: str, item_type: str, **media: str | None) -> MagicMock:
+    item = MagicMock(id=mid, item_type=item_type)
+    item.media = (
+        MagicMock(**{"video_url": None, "audio_url": None, "thumbnail_url": None} | media)
+        if media
+        else None
+    )
+    return item
+
+
+class TestChannelClientMethods:
+    def test_react_and_remove(self, instagram_client: InstagramClient) -> None:
+        ig = instagram_client.client
+        ig.direct_send_reaction.return_value = True
+        ig.direct_delete_reaction.return_value = True
+        assert instagram_client.react("111", "222", "🔥") is True
+        ig.direct_send_reaction.assert_called_once_with(111, 222, emoji="🔥")
+        assert instagram_client.react("111", "222", "🔥", remove=True) is True
+        ig.direct_delete_reaction.assert_called_once_with(111, 222, emoji="🔥")
+
+    def test_mark_seen(self, instagram_client: InstagramClient) -> None:
+        instagram_client.client.direct_message_seen.return_value = True
+        assert instagram_client.mark_seen("111", "222") is True
+        instagram_client.client.direct_message_seen.assert_called_once_with(111, 222)
+
+    def test_download_message_media(
+        self, instagram_client: InstagramClient, tmp_path: Path
+    ) -> None:
+        thread = MagicMock(
+            messages=[_ig_message("9", "media", thumbnail_url="https://cdn/x/photo.jpg")]
+        )
+        instagram_client.client.direct_thread.return_value = thread
+        response = MagicMock(content=b"jpeg", headers={"content-type": "image/jpeg"})
+        with patch("instagram_mcp.client.httpx2.get", return_value=response) as get:
+            path = instagram_client.download_message_media("123456789", "9", tmp_path / "media")
+        get.assert_called_once_with("https://cdn/x/photo.jpg", timeout=60, follow_redirects=True)
+        assert path == tmp_path / "media" / "456789-9.jpg"
+        assert path.read_bytes() == b"jpeg"
+
+    def test_download_prefers_video_and_url_suffix(
+        self, instagram_client: InstagramClient, tmp_path: Path
+    ) -> None:
+        item = _ig_message(
+            "9", "video", video_url="https://cdn/v/clip.mp4?x=1", thumbnail_url="https://t"
+        )
+        instagram_client.client.direct_thread.return_value = MagicMock(messages=[item])
+        response = MagicMock(content=b"mp4", headers={})
+        with patch("instagram_mcp.client.httpx2.get", return_value=response):
+            path = instagram_client.download_message_media("1", "9", tmp_path)
+        assert path.suffix == ".mp4"
+
+    @pytest.mark.parametrize(
+        ("messages", "error"),
+        [
+            ([], "not in the latest 50"),
+            ([_ig_message("9", "raven_media", thumbnail_url="https://t")], "view-once"),
+            ([_ig_message("9", "text")], "no downloadable media"),
+        ],
+    )
+    def test_download_refusals(
+        self,
+        instagram_client: InstagramClient,
+        tmp_path: Path,
+        messages: list[MagicMock],
+        error: str,
+    ) -> None:
+        instagram_client.client.direct_thread.return_value = MagicMock(messages=messages)
+        with pytest.raises(InstagramClientError, match=error):
+            instagram_client.download_message_media("1", "9", tmp_path)
+
+    def test_send_voice_m4a_as_is(self, instagram_client: InstagramClient, tmp_path: Path) -> None:
+        clip = tmp_path / "v.m4a"
+        clip.write_bytes(b"aac")
+        sent = MagicMock(
+            id="5", user_id="1", text=None, item_type="voice_media", is_sent_by_viewer=True
+        )
+        sent.user = None
+        sent.media = None
+        sent.timestamp = datetime(2026, 9, 27)
+        instagram_client.client.direct_send_voice.return_value = sent
+        message = instagram_client.send_voice(clip, "111")
+        instagram_client.client.direct_send_voice.assert_called_once_with(
+            path=clip, thread_ids=[111]
+        )
+        assert message is not None
+        assert message.message_id == "5"
+
+    def test_send_voice_converts_with_ffmpeg(
+        self, instagram_client: InstagramClient, tmp_path: Path
+    ) -> None:
+        clip = tmp_path / "v.ogg"
+        clip.write_bytes(b"opus")
+        instagram_client.client.direct_send_voice.return_value = None
+        with (
+            patch("instagram_mcp.client.shutil.which", return_value="/usr/bin/ffmpeg"),
+            patch("instagram_mcp.client.subprocess.run") as run,
+        ):
+            assert instagram_client.send_voice(clip, "111") is None
+        argv = run.call_args.args[0]
+        assert argv[:2] == ["/usr/bin/ffmpeg", "-y"]
+        assert argv[-1].endswith("v.m4a")
+        sent_path = instagram_client.client.direct_send_voice.call_args.kwargs["path"]
+        assert sent_path.suffix == ".m4a"
+
+    def test_send_voice_needs_ffmpeg(
+        self, instagram_client: InstagramClient, tmp_path: Path
+    ) -> None:
+        with (
+            patch("instagram_mcp.client.shutil.which", return_value=None),
+            pytest.raises(InstagramClientError, match="ffmpeg"),
+        ):
+            instagram_client.send_voice(tmp_path / "v.wav", "111")

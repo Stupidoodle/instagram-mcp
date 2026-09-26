@@ -8,6 +8,8 @@ import zlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from instagram_mcp.mqtt.connection import PINGREQ, PINGRESP, PUBACK, PUBLISH
 from instagram_mcp.mqtt.events import MessageEvent, SeenEvent, TypingEvent
 from instagram_mcp.mqtt.manager import MQTTManager, _PINGREQ_RESPONSE_TIMEOUT, _STALE_TIMEOUT
@@ -894,3 +896,22 @@ class TestMQTTManagerWatchdog:
             assert mgr._watchdog_thread is not None
             mgr._watchdog_thread.join(1)
             assert not mgr._watchdog_thread.is_alive()
+
+
+class TestMQTTManagerTyping:
+    def test_indicate_activity_publishes_command(self) -> None:
+        mgr = MQTTManager()
+        mgr._conn = MagicMock()
+        with patch.object(mgr, "ensure_connected", return_value=True):
+            mgr.indicate_activity("T1", active=False)
+        topic, payload = mgr._conn.publish.call_args.args[:2]
+        assert topic == 132
+        assert payload["action"] == "indicate_activity"
+        assert payload["thread_id"] == "T1"
+        assert payload["activity_status"] == "0"
+        assert payload["client_context"]
+
+    def test_indicate_activity_needs_connection(self) -> None:
+        mgr = MQTTManager()
+        with patch.object(mgr, "ensure_connected", return_value=False), pytest.raises(RuntimeError):
+            mgr.indicate_activity("T1")

@@ -20,6 +20,7 @@ from instagram_mcp.tools import (
     register_channel_tools,
     register_media_tools,
     register_message_tools,
+    register_messaging_tools,
     register_thread_tools,
 )
 
@@ -130,6 +131,9 @@ def create_server(settings: Settings | None = None) -> MCPServer:
 
     # Register all tools
     register_channel_tools(_mcp, _channel)
+    register_messaging_tools(
+        _mcp, _client, _channel, get_mqtt_manager, settings.instagram_media_dir
+    )
     register_thread_tools(_mcp, _client)
     register_message_tools(_mcp, _client)
     register_media_tools(_mcp, _client)

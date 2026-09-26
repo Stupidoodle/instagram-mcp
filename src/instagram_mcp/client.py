@@ -6,12 +6,16 @@ session persistence and proper error handling for MCP server usage.
 
 import json
 import logging
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import httpx2
 from instagrapi import Client
 from instagrapi.exceptions import (
     BadPassword,
@@ -887,6 +891,96 @@ class InstagramClient:
             )
         )
 
+    def react(self, thread_id: str, message_id: str, emoji: str, *, remove: bool = False) -> bool:
+        """Add or remove the viewer's emoji reaction on a message.
+
+        Args:
+            thread_id: ID of the thread.
+            message_id: ID of the message to react to.
+            emoji: The emoji (for a removal: the one being removed).
+            remove: Remove the reaction instead of adding it.
+
+        Returns:
+            bool: True if successful.
+        """
+        action = self.client.direct_delete_reaction if remove else self.client.direct_send_reaction
+        return bool(self._retry_on_rate_limit(action, int(thread_id), int(message_id), emoji=emoji))
+
+    def mark_seen(self, thread_id: str, message_id: str) -> bool:
+        """Send a read receipt up to a message.
+
+        Args:
+            thread_id: ID of the thread.
+            message_id: ID of the newest message being marked seen.
+
+        Returns:
+            bool: True if successful.
+        """
+        return bool(
+            self._retry_on_rate_limit(
+                self.client.direct_message_seen, int(thread_id), int(message_id)
+            )
+        )
+
+    def download_message_media(self, thread_id: str, message_id: str, folder: Path) -> Path:
+        """Download the photo, video or voice clip of a message.
+
+        View-once media is refused: it was meant to be seen once, on the phone.
+
+        Args:
+            thread_id: ID of the thread.
+            message_id: ID of the message with the media.
+            folder: Where to save the file.
+
+        Returns:
+            Path: The downloaded file.
+
+        Raises:
+            InstagramClientError: If the message isn't found, is view-once, or has no media.
+        """
+        thread = self._retry_on_rate_limit(
+            self.client.direct_thread, thread_id=int(thread_id), amount=50
+        )
+        item = next((m for m in thread.messages or [] if str(m.id) == message_id), None)
+        if item is None:
+            msg = f"message {message_id} not in the latest 50 of this thread"
+            raise InstagramClientError(msg)
+        if item.item_type == "raven_media":
+            msg = "view-once media isn't downloadable"
+            raise InstagramClientError(msg)
+        media = item.media
+        url = media and (media.video_url or media.audio_url or media.thumbnail_url)
+        if not url:
+            msg = f"message {message_id} ({item.item_type}) has no downloadable media"
+            raise InstagramClientError(msg)
+        response = httpx2.get(str(url), timeout=60, follow_redirects=True)
+        response.raise_for_status()
+        suffix = _suffix_for(response.headers.get("content-type", ""), str(url))
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{thread_id[-6:]}-{message_id}{suffix}"
+        path.write_bytes(response.content)
+        return path
+
+    def send_voice(self, path: Path, thread_id: str) -> DirectMessage | None:
+        """Send an audio file as a voice message.
+
+        Instagram only accepts AAC in an MP4 container, so anything else is
+        converted with ffmpeg first.
+
+        Args:
+            path: Path to the audio file.
+            thread_id: ID of the thread.
+
+        Returns:
+            DirectMessage: The sent message, or None if failed.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = path if path.suffix.lower() == ".m4a" else _to_m4a(path, Path(tmp))
+            result = self.client.direct_send_voice(path=clip, thread_ids=[int(thread_id)])
+        if result:
+            return _convert_message(result, thread_id)
+        return None
+
     # Media operations
     def send_photo(
         self,
@@ -999,6 +1093,40 @@ class InstagramClient:
                 thread_ids=thread_ids_int,
             )
         )
+
+
+_SUFFIXES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/heic": ".heic",
+    "video/mp4": ".mp4",
+    "audio/mp4": ".m4a",
+    "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg",
+}
+
+
+def _suffix_for(content_type: str, url: str) -> str:
+    """File suffix from the response type, else from the URL path."""
+    known = _SUFFIXES.get(content_type.split(";", 1)[0].strip())
+    if known:
+        return known
+    return Path(httpx2.URL(url).path).suffix or ".bin"
+
+
+def _to_m4a(source: Path, folder: Path) -> Path:
+    """Convert an audio file to AAC in an MP4 container with ffmpeg."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        msg = "ffmpeg is needed to convert voice messages to .m4a"
+        raise InstagramClientError(msg)
+    target = folder / f"{source.stem}.m4a"
+    argv = [ffmpeg, "-y", "-loglevel", "error", "-i", str(source)]
+    argv += ["-c:a", "aac", "-b:a", "64k", str(target)]
+    subprocess.run(argv, check=True, capture_output=True)  # noqa: S603 - fixed argv, file paths
+
+    return target
 
 
 def interactive_login() -> None:

@@ -82,3 +82,6 @@ tmp/
 temp/
 *.tmp
 *.temp
+
+# Media fetched by download_attachment
+media/

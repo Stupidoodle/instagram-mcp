@@ -11,6 +11,7 @@ import logging
 import queue
 import threading
 import time
+import uuid
 from typing import TYPE_CHECKING
 
 from instagram_mcp.mqtt.connection import PINGREQ, PINGRESP, PUBACK, PUBLISH, MQTToTConnection
@@ -18,7 +19,7 @@ from instagram_mcp.mqtt.events import Event, MessageEvent
 from instagram_mcp.mqtt.parser import parse_payload, parse_publish_packet
 from instagram_mcp.mqtt.router import EventRouter
 from instagram_mcp.mqtt.thrift import build_connect_payload
-from instagram_mcp.mqtt.topics import SUB_IRIS
+from instagram_mcp.mqtt.topics import SEND_MESSAGE, SUB_IRIS
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -143,6 +144,28 @@ class MQTTManager:
             daemon=True,
         )
         self._watchdog_thread.start()
+
+    def indicate_activity(self, thread_id: str, *, active: bool = True) -> None:
+        """Show or clear the typing indicator in a thread.
+
+        Sends the ``indicate_activity`` command on ``/ig_send_message``, the
+        same one the Instagram app sends while you type.
+
+        Raises:
+            RuntimeError: If the MQTT connection is down and can't be restored.
+        """
+        if not self.ensure_connected():
+            msg = "MQTT not connected"
+            raise RuntimeError(msg)
+        self._publish(
+            SEND_MESSAGE,
+            {
+                "action": "indicate_activity",
+                "thread_id": thread_id,
+                "client_context": str(uuid.uuid4()),
+                "activity_status": "1" if active else "0",
+            },
+        )
 
     def _watchdog_loop(self, interval: float) -> None:
         """Reconnect whenever the connection goes stale, until stopped."""

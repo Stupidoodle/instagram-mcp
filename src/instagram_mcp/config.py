@@ -50,6 +50,10 @@ class Settings(BaseSettings):
         default="INFO",
         description="Logging level",
     )
+    instagram_media_dir: Path = Field(
+        default=Path("media"),
+        description="Where download_attachment saves photos, videos and voice clips",
+    )
     instagram_subscribe: str = Field(
         default="",
         description="Threads to stream on startup: 'alias=thread_id,alias2=thread_id2'",
