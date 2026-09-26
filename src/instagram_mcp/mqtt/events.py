@@ -18,13 +18,14 @@ class Event:
 
 @dataclass(frozen=True)
 class MessageEvent(Event):
-    """New message received (topic 146, op=add on items path)."""
+    """New message (topic 146, op=add on items path) or an edit (op=replace)."""
 
     item_id: str
     user_id: int
     text: str | None
     item_type: str
     timestamp: int  # microseconds since epoch
+    edited: bool = False
 
 
 @dataclass(frozen=True)

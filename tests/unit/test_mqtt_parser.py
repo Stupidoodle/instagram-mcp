@@ -83,6 +83,7 @@ class TestParseIrisMessageEvent:
         assert msg.text == "hello world"
         assert msg.item_type == "text"
         assert msg.timestamp == 1770628773364437
+        assert msg.edited is False
 
     def test_media_message(self) -> None:
         value = json.dumps(
@@ -721,7 +722,7 @@ class TestParseEdgeCases:
         assert events[0].user_id == 0
 
     def test_replace_message(self) -> None:
-        """op=replace on items path also creates MessageEvent."""
+        """op=replace on items path creates a MessageEvent flagged as an edit."""
         value = json.dumps(
             {
                 "item_id": "I1",
@@ -749,6 +750,7 @@ class TestParseEdgeCases:
         assert len(events) == 1
         assert isinstance(events[0], MessageEvent)
         assert events[0].text == "edited"
+        assert events[0].edited is True
 
     def test_pubsub_inline_sender_id(self) -> None:
         """Pubsub data where sender_id is directly in item (no nested value)."""

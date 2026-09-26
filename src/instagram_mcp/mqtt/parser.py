@@ -163,8 +163,7 @@ def _parse_iris_patch(op: str, path: str, value_str: str) -> Event | None:  # no
             elif op == "remove":
                 return _parse_unsend(thread_id, item_id, value_str)
             elif op == "replace":
-                # Message update (edit, etc.) — treat as message
-                return _parse_message(thread_id, item_id, value_str)
+                return _parse_message(thread_id, item_id, value_str, edited=True)
 
         # /direct_v2/threads/{tid}/participants/{uid}/has_seen
         if subpath == "participants" and len(parts) >= 7 and parts[6] == "has_seen":
@@ -191,8 +190,10 @@ def _parse_iris_patch(op: str, path: str, value_str: str) -> Event | None:  # no
     return None
 
 
-def _parse_message(thread_id: str, item_id: str, value_str: str) -> MessageEvent | None:
-    """Parse a message add/replace event."""
+def _parse_message(
+    thread_id: str, item_id: str, value_str: str, *, edited: bool = False
+) -> MessageEvent | None:
+    """Parse a message add (new) or replace (edit) event."""
     try:
         value = json.loads(value_str) if isinstance(value_str, str) else value_str
     except (json.JSONDecodeError, TypeError):
@@ -208,6 +209,7 @@ def _parse_message(thread_id: str, item_id: str, value_str: str) -> MessageEvent
         text=value.get("text"),
         item_type=value.get("item_type", "unknown"),
         timestamp=int(value.get("timestamp", 0)),
+        edited=edited,
     )
 
 
