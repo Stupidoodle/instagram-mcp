@@ -276,6 +276,31 @@ class TestIdle:
         assert channel.idle_nudges(start + 9 * 60) == []
         assert len(channel.idle_nudges(start + 10 * 60)) == 1
 
+    def test_backoff_after_thirty_quiet_minutes(self) -> None:
+        channel, _ = _channel(idle_minutes=5, idle_backoff_after_minutes=30, idle_max_minutes=60)
+        channel.subscribe(T1, "ly")
+        start = channel._chats[T1].last_activity
+        fired = [m for m in range(0, 400) if channel.idle_nudges(start + m * 60)]
+        # every 5 min up to 30, then the gap doubles (10, 20, 40) and caps at 60
+        assert fired == [5, 10, 15, 20, 25, 30, 40, 60, 100, 160, 220, 280, 340]
+
+    def test_backoff_resets_on_activity(self) -> None:
+        channel, _ = _channel(idle_minutes=5)
+        channel.subscribe(T1, "ly")
+        start = channel._chats[T1].last_activity
+        for m in range(0, 45):
+            channel.idle_nudges(start + m * 60)
+        assert channel._chats[T1].nudge_interval == 20
+        channel.handle(_msg())
+        assert channel._chats[T1].nudge_interval is None
+
+    def test_idle_meta_announces_next_nudge(self) -> None:
+        channel, _ = _channel(idle_minutes=5)
+        channel.subscribe(T1, "ly")
+        ((content, meta),) = channel.idle_nudges(channel._chats[T1].last_activity + 5 * 60)
+        assert meta["next_nudge_minutes"] == "5"
+        assert "next nudge in 5 min" in content
+
     def test_disabled_and_control(self) -> None:
         channel, _ = _channel(idle_minutes=0, control_thread=T2)
         channel.subscribe(T1, "ly")

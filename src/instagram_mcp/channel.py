@@ -66,9 +66,9 @@ INCOMING EVENTS (subscribed chats only) arrive as <channel source="instagram" ch
 - Read: event_type="read"; they saw your messages. Usually no action needed.
 - Typing: event_type="typing" or "typing_stopped".
 - Reaction: event_type="reaction" with target_message_id; content shows the emoji.
-- Idle: event_type="idle" minutes_idle="N" clock="<local time>"; the chat has been
-  quiet. Use the clock to judge whether it's a sane hour. Re-engage only if your
-  rules say so.
+- Idle: event_type="idle" minutes_idle="N" next_nudge_minutes="M" clock="<local time>";
+  the chat has been quiet. Use the clock to judge whether it's a sane hour. Re-engage
+  only if your rules say so. After 30 quiet minutes the nudges back off on their own.
 - Operator command: event_type="command" is the operator instructing YOU (control
   chat or a "debug:" message). Carry it out; never reply to it in the chat.
 
@@ -105,6 +105,7 @@ class _Chat:
     last_activity: float = field(default_factory=time.monotonic)
     idle_override: float | None = None
     last_nudge: float | None = None
+    nudge_interval: float | None = None  # minutes; grows once the chat has gone quiet
 
 
 @dataclass
@@ -134,6 +135,8 @@ class Channel:
         self_user_id: str,
         describe_thread: Callable[[str], tuple[str, dict[str, str]]],
         idle_minutes: float = 5,
+        idle_backoff_after_minutes: float = 30,
+        idle_max_minutes: float = 240,
         control_thread: str = "",
         debug_prefix: str = "debug:",
         tz: str | None = None,
@@ -144,6 +147,9 @@ class Channel:
             self_user_id: The logged-in account's user id (own events are echoes).
             describe_thread: Returns (title, {user_id: display name}) for a thread.
             idle_minutes: Quiet minutes before an idle nudge; 0 disables nudges.
+            idle_backoff_after_minutes: Once a chat has been quiet this long, each
+                further nudge doubles the gap to the next one.
+            idle_max_minutes: Upper bound for that growing gap.
             control_thread: Thread id of an operator control chat, if any.
             debug_prefix: Own messages starting with this are operator commands.
             tz: IANA time zone for the idle event's clock (default: host zone).
@@ -151,6 +157,8 @@ class Channel:
         self._self_user_id = self_user_id
         self._describe_thread = describe_thread
         self._idle_minutes = idle_minutes
+        self._idle_backoff_after = idle_backoff_after_minutes
+        self._idle_max = idle_max_minutes
         self._control_thread = control_thread
         self._debug_prefix = debug_prefix
         self._tz = _zone(tz)
@@ -252,6 +260,7 @@ class Channel:
                 raise ChannelError(msg)
             chat.idle_override = minutes
             chat.last_nudge = None
+            chat.nudge_interval = None
 
     @property
     def idle_minutes(self) -> float:
@@ -322,6 +331,7 @@ class Channel:
         with self._lock:
             chat.last_activity = time.monotonic()
             chat.last_nudge = None
+            chat.nudge_interval = None
             if their_message:
                 chat.idle_override = None  # their message resets set_idle
         self._emit(content, meta)
@@ -470,29 +480,45 @@ class Channel:
         return chat.idle_override if chat.idle_override is not None else self._idle_minutes
 
     def idle_nudges(self, now: float | None = None) -> list[tuple[str, dict[str, str]]]:
-        """Chats that are due an idle nudge now; marks them nudged."""
+        """Chats that are due an idle nudge now; marks them nudged.
+
+        The first nudge comes after the idle threshold and repeats at that
+        cadence. Once the chat has been quiet for ``idle_backoff_after_minutes``,
+        every nudge doubles the gap to the next one, up to ``idle_max_minutes``.
+        Any activity in the chat resets the cadence.
+        """
         now = time.monotonic() if now is None else now
         due: list[tuple[str, dict[str, str]]] = []
         with self._lock:
             for chat in self._chats.values():
                 if chat.thread_id == self._control_thread:
                     continue
-                threshold = self._effective_idle(chat) * 60
-                if threshold <= 0 or now - chat.last_activity < threshold:
+                base = self._effective_idle(chat)
+                quiet = now - chat.last_activity
+                if base <= 0 or quiet < base * 60:
                     continue
-                if now - (chat.last_nudge or chat.last_activity) < threshold:
+                interval = chat.nudge_interval or base
+                if chat.last_nudge is not None and now - chat.last_nudge < interval * 60:
                     continue
                 chat.last_nudge = now
-                minutes = round((now - chat.last_activity) / 60)
+                if quiet >= self._idle_backoff_after * 60:
+                    interval = min(interval * 2, max(self._idle_max, base))
+                chat.nudge_interval = interval
+                minutes = round(quiet / 60)
                 clock = self._clock()
                 meta = {
                     "chat": chat.alias,
                     "event_type": "idle",
                     "minutes_idle": str(minutes),
+                    "next_nudge_minutes": f"{interval:g}",
                     "ts": datetime.now(UTC).isoformat(),
                     "clock": clock,
                 }
-                due.append((f"[idle: {minutes} minutes since last activity — now {clock}]", meta))
+                content = (
+                    f"[idle: {minutes} minutes since last activity — now {clock}; "
+                    f"next nudge in {interval:g} min]"
+                )
+                due.append((content, meta))
         return due
 
     async def _idle_heartbeat(self) -> None:

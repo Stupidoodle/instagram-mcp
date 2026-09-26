@@ -59,6 +59,16 @@ class Settings(BaseSettings):
         ge=0,
         description="Quiet minutes before an idle nudge (0 disables)",
     )
+    instagram_idle_backoff_after_minutes: float = Field(
+        default=30,
+        ge=0,
+        description="After this many quiet minutes, each idle nudge doubles the gap to the next",
+    )
+    instagram_idle_max_minutes: float = Field(
+        default=240,
+        gt=0,
+        description="Longest gap between idle nudges once they back off",
+    )
     instagram_control_thread: str = Field(
         default="",
         description="Thread id of an operator control chat (its messages become commands)",
