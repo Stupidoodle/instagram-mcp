@@ -13,7 +13,7 @@ import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx2
 from instagrapi import Client
@@ -24,9 +24,6 @@ from instagrapi.exceptions import (
     LoginRequired,
     TwoFactorRequired,
 )
-from instagrapi.types import DirectMessage as IGDirectMessage
-from instagrapi.types import DirectThread as IGDirectThread
-from instagrapi.types import User as IGUser
 
 from instagram_mcp.models.schemas import (
     DirectMessage,
@@ -35,6 +32,11 @@ from instagram_mcp.models.schemas import (
     MessageContent,
     ThreadUser,
 )
+
+if TYPE_CHECKING:
+    from instagrapi.types import DirectMessage as IGDirectMessage
+    from instagrapi.types import DirectThread as IGDirectThread
+    from instagrapi.types import User as IGUser
 
 logger = logging.getLogger("instagram_mcp")
 

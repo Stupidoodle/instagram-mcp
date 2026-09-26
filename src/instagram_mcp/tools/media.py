@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("instagram_mcp")
 
 
-def register_media_tools(mcp: "MCPServer", client: "InstagramClient") -> None:
+def register_media_tools(mcp: MCPServer, client: InstagramClient) -> None:
     """Register the sharing tools with the MCP server.
 
     Args:

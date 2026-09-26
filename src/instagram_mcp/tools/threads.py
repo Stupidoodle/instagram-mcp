@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("instagram_mcp")
 
 
-def register_thread_tools(mcp: "MCPServer", client: "InstagramClient") -> None:
+def register_thread_tools(mcp: MCPServer, client: InstagramClient) -> None:
     """Register thread management tools with the MCP server.
 
     Args:
