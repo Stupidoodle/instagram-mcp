@@ -463,13 +463,16 @@ class TestMQTTManagerStaleDetection:
         mgr = MQTTManager()
         mock_conn = MagicMock()
         mock_conn.is_connected = True
-        mock_conn.read_packet.return_value = None
         mgr._conn = mock_conn
 
-        # Simulate: PINGREQ sent 20s ago, last packet 60s ago
-        now = time.monotonic()
-        mgr._last_packet_time = now - 60
-        mgr._pingreq_sent_at = now - _PINGREQ_RESPONSE_TIMEOUT - 5
+        # _reader_loop() resets both timestamps on entry, so make them stale
+        # from inside the first read: PINGREQ sent 20s ago, last packet 60s ago.
+        def stale_read() -> None:
+            now = time.monotonic()
+            mgr._last_packet_time = now - 60
+            mgr._pingreq_sent_at = now - _PINGREQ_RESPONSE_TIMEOUT - 5
+
+        mock_conn.read_packet.side_effect = stale_read
 
         # Run reader loop — should detect unanswered PINGREQ and break
         import instagram_mcp.mqtt.manager as manager_mod
