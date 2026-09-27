@@ -429,7 +429,8 @@ class Channel:
     ) -> tuple[str, dict[str, str]] | None:
         text = event.text or ""
         if event.timestamp:
-            meta["ts"] = datetime.fromtimestamp(event.timestamp / 1_000_000, UTC).isoformat()
+            sent = datetime.fromtimestamp(event.timestamp / 1_000_000, UTC)
+            meta["ts"] = sent.astimezone(self._tz).isoformat()  # local time, with offset
 
         # A system line (missed call, theme change...), not something anyone said.
         if event.item_type == "action_log":

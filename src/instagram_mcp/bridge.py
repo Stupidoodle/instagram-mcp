@@ -25,6 +25,7 @@ import json
 import logging
 import sys
 import time
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import httpx2
@@ -441,6 +442,11 @@ async def download(request: Request) -> JSONResponse:
     return JSONResponse({"success": True, "path": str(path.resolve())})
 
 
+def local_iso(moment: datetime) -> str:
+    """Local time with its offset; instagrapi's naive times are already host-local."""
+    return moment.astimezone().isoformat()
+
+
 def _thread_json(thread: Any) -> dict[str, Any]:
     """Serialize a thread to the bridge's JSON shape."""
     users = [
@@ -455,7 +461,7 @@ def _thread_json(thread: Any) -> dict[str, Any]:
         "is_group": thread.is_group,
         "is_muted": getattr(thread, "is_muted", False),
         "unread": getattr(thread, "unread", False),
-        "last_activity_at": last.isoformat() if last else None,
+        "last_activity_at": local_iso(last) if last else None,
     }
 
 
@@ -484,7 +490,7 @@ def _msg_json(m: Any) -> dict[str, Any]:
         "media_url": m.content.media_url,
         "link_url": m.content.link_url,
         "link_title": m.content.link_title,
-        "timestamp": m.timestamp.isoformat(),
+        "timestamp": local_iso(m.timestamp),
         "is_from_me": m.is_sent_by_viewer,
         "seen_since": m.seen_since,
         "reactions": [{"user_id": r.user_id, "emoji": r.emoji} for r in m.reactions],

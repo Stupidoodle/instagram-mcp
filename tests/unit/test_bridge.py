@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 import uvicorn
 
 from instagram_mcp import bridge
@@ -111,7 +113,9 @@ class TestJsonSerializers:
         assert data["is_muted"] is True
         assert data["last_activity_at"] is None
 
-    def test_msg_json(self) -> None:
+    def test_msg_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("TZ", "Europe/Zurich")
+        time.tzset()
         msg = SimpleNamespace(
             message_id="m1",
             sender=SimpleNamespace(user_id="1", username="a"),
@@ -137,7 +141,7 @@ class TestJsonSerializers:
             "media_url": None,
             "link_url": None,
             "link_title": None,
-            "timestamp": "2024-01-15T10:30:00",
+            "timestamp": "2024-01-15T10:30:00+01:00",
             "is_from_me": True,
             "seen_since": 5,
             "reactions": [{"user_id": "2", "emoji": "🩷"}],
