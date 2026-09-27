@@ -324,6 +324,108 @@ class TestParseIrisReactionEvent:
         assert events[0].reaction_type == "likes"
 
 
+def _patches(*patches: dict[str, str], seq_id: int = 10) -> bytes:
+    return zlib.compress(
+        json.dumps([{"event": "patch", "data": list(patches), "seq_id": seq_id}]).encode()
+    )
+
+
+class TestParseAppReaction:
+    """A reaction made in the Instagram app, as captured on 2026-09-27 (ids faked).
+
+    The app sends the reaction patch plus a hidden "Liked a message" action_log
+    item, and removing the reaction also removes that hidden item.
+    """
+
+    T = "340282366841700000000000000000000000001"
+    TARGET = "30000000000000000000000000000000001"
+
+    def _react(self, log_item: str) -> bytes:
+        return _patches(
+            {
+                "op": "add",
+                "path": f"/direct_v2/threads/{self.T}/items/{self.TARGET}/reactions/likes/42",
+                "value": json.dumps(
+                    {"emoji": "\u2764", "super_react_type": "none", "timestamp": 1790518733608965}
+                ),
+            },
+            {
+                "op": "add",
+                "path": f"/direct_v2/threads/{self.T}/items/{log_item}",
+                "value": json.dumps(
+                    {
+                        "item_id": log_item,
+                        "timestamp": 1790518733608965,
+                        "user_id": 42,
+                        "item_type": "action_log",
+                        "action_log": {
+                            "description": "Liked a message",
+                            "text_parts": [{"text": "Liked a message"}],
+                            "is_reaction_log": True,
+                        },
+                        "hide_in_thread": 1,
+                    }
+                ),
+            },
+        )
+
+    def test_only_the_reaction_is_emitted(self) -> None:
+        events, _ = parse_payload("146", self._react("30000000000000000000000000000000002"))
+        assert len(events) == 1
+        assert isinstance(events[0], ReactionEvent)
+        assert events[0].item_id == self.TARGET
+        assert events[0].emoji == "\u2764"
+
+    def test_removing_it_is_not_an_unsend(self) -> None:
+        log_item = "30000000000000000000000000000000003"
+        parse_payload("146", self._react(log_item))
+        events, _ = parse_payload(
+            "146",
+            _patches(
+                {
+                    "op": "remove",
+                    "path": f"/direct_v2/threads/{self.T}/items/{self.TARGET}/reactions/likes/42",
+                    "value": json.dumps({"emoji": "\u2764", "super_react_type": "none"}),
+                },
+                # The app sends the bare item id as the value here.
+                {
+                    "op": "remove",
+                    "path": f"/direct_v2/threads/{self.T}/items/{log_item}",
+                    "value": log_item,
+                },
+            ),
+        )
+        assert len(events) == 1
+        assert isinstance(events[0], ReactionEvent)
+        assert events[0].emoji is None
+
+    def test_visible_action_log_carries_its_description(self) -> None:
+        item = "30000000000000000000000000000000004"
+        events, _ = parse_payload(
+            "146",
+            _patches(
+                {
+                    "op": "add",
+                    "path": f"/direct_v2/threads/{self.T}/items/{item}",
+                    "value": json.dumps(
+                        {
+                            "item_id": item,
+                            "timestamp": 1,
+                            "user_id": 42,
+                            "item_type": "action_log",
+                            "action_log": {"description": "You missed a video chat"},
+                            "hide_in_thread": 0,
+                        }
+                    ),
+                }
+            ),
+        )
+        assert len(events) == 1
+        assert isinstance(events[0], MessageEvent)
+        assert events[0].item_type == "action_log"
+        assert events[0].text == "You missed a video chat"
+
+
 class TestParseIrisTypingEvent:
     def test_activity_indicator(self) -> None:
         """Typing indicator via topic 146 activity_indicator path."""

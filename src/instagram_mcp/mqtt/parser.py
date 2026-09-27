@@ -6,6 +6,7 @@ Skywalker typing indicators.
 
 from __future__ import annotations
 
+import collections
 import contextlib
 import json
 import logging
@@ -99,6 +100,20 @@ def _log_raw_patch(op: str, path: str, value_str: Any) -> None:
     # Debug logging must never break parsing.
     with contextlib.suppress(Exception), open(_PATCH_LOG, "a") as f:  # noqa: PTH123
         f.write(f"{op}\t{path}\t{value_str}\n")
+
+
+# Items the Instagram app never shows (hide_in_thread), like the "Liked a message"
+# action_log that comes with a reaction. Remembered so their later removal isn't
+# reported as an unsend. Bounded, per process.
+_HIDDEN_ITEMS: collections.OrderedDict[str, None] = collections.OrderedDict()
+_HIDDEN_ITEMS_MAX = 4096
+
+
+def _remember_hidden(item_id: str) -> None:
+    _HIDDEN_ITEMS[item_id] = None
+    _HIDDEN_ITEMS.move_to_end(item_id)
+    while len(_HIDDEN_ITEMS) > _HIDDEN_ITEMS_MAX:
+        _HIDDEN_ITEMS.popitem(last=False)
 
 
 def _parse_iris_payload(data: Any) -> tuple[list[Event], int]:
@@ -220,19 +235,33 @@ def _parse_message(
     if not isinstance(value, dict):
         return None
 
+    item = str(value.get("item_id", item_id))
+    if value.get("hide_in_thread"):
+        _remember_hidden(item)
+        return None
+
+    item_type = value.get("item_type", "unknown")
+    text = value.get("text")
+    action_log = value.get("action_log")
+    if text is None and item_type == "action_log" and isinstance(action_log, dict):
+        text = action_log.get("description")
+
     return MessageEvent(
         thread_id=thread_id,
-        item_id=value.get("item_id", item_id),
+        item_id=item,
         user_id=int(value.get("user_id", 0)),
-        text=value.get("text"),
-        item_type=value.get("item_type", "unknown"),
+        text=text,
+        item_type=item_type,
         timestamp=int(value.get("timestamp", 0)),
         edited=edited,
     )
 
 
-def _parse_unsend(thread_id: str, item_id: str, value_str: str) -> UnsendEvent:
-    """Parse a message remove (unsend) event."""
+def _parse_unsend(thread_id: str, item_id: str, value_str: str) -> UnsendEvent | None:
+    """Parse a message remove (unsend) event; removing a hidden item is not one."""
+    if item_id in _HIDDEN_ITEMS:
+        del _HIDDEN_ITEMS[item_id]
+        return None
     user_id = 0
     try:
         value = json.loads(value_str) if isinstance(value_str, str) else value_str
