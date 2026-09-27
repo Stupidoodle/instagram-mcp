@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import struct
 import zlib
 from typing import Any
@@ -85,6 +86,22 @@ def parse_payload(topic: str, raw_payload: bytes) -> tuple[list[Event], int]:
     return _parse_pubsub_payload(data), 0
 
 
+# Debug hook: when IG_PATCH_LOG is set, append every raw Iris patch (op, path,
+# truncated value) to that file, so the real shape of e.g. reactions can be seen
+# without guessing. Off unless the env var is set.
+_PATCH_LOG = os.environ.get("IG_PATCH_LOG")
+
+
+def _log_raw_patch(op: str, path: str, value_str: Any) -> None:
+    if not _PATCH_LOG:
+        return
+    try:
+        with open(_PATCH_LOG, "a") as f:  # noqa: PTH123
+            f.write(f"{op}\t{path}\t{str(value_str)[:600]}\n")
+    except Exception:  # noqa: BLE001 - debug logging must never break parsing
+        pass
+
+
 def _parse_iris_payload(data: Any) -> tuple[list[Event], int]:
     """Parse topic 146 Iris patch payload into events.
 
@@ -123,6 +140,8 @@ def _parse_iris_payload(data: Any) -> tuple[list[Event], int]:
             op = patch.get("op", "")
             path = patch.get("path", "")
             value_str = patch.get("value", "{}")
+
+            _log_raw_patch(op, path, value_str)
 
             parsed = _parse_iris_patch(op, path, value_str)
             if parsed:
