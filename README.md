@@ -4,21 +4,32 @@ An MCP server that lets Claude read and send Instagram DMs. Built entirely by Cl
 
 ## Features
 
-**Thread Management**
-- `list_threads` / `get_thread` / `search_threads` - Browse conversations
-- `get_pending_threads` - See message requests
-- `hide_thread` / `mute_thread` / `unmute_thread` - Inbox management
+New DMs, typing, reactions, read receipts, edits and unsends arrive over Instagram's
+MQTT connection and are **pushed straight into the Claude Code session** as channel
+events. Nothing polls. The channel tools use the same names as the WhatsApp channel.
 
-**Messages**
-- `send_message` / `reply_to_thread` - Send messages
-- `get_messages` - Read history with read receipts (`seen_since` shows minutes on read)
-- `delete_message` - Remove messages
-- `send_and_check` - Send + detect if they replied while you were typing
-- `wait_for_reply` - Block until they respond (with configurable timeout)
+**Channel (realtime)**
+- `subscribe` / `unsubscribe` / `list_subscriptions` - Pick which chats stream events, each under a short alias
+- `reply` - Send a text message
+- `send_file` / `send_audio` - Send a photo or video / a voice message (converted to `.m4a`)
+- `send_typing` / `mark_read` - Typing indicator / "Seen"
+- `react` / `unsend` / `get_message_ids` - React, take back your own messages
+- `download_attachment` - Fetch a photo, video or voice clip (view-once media is never downloaded)
+- `set_idle` - Tune the idle-nudge cadence per chat
 
-**Media**
-- `send_photo` / `send_video` - Send media files
-- `share_media` / `share_profile` - Share posts and profiles
+**Reading**
+- `list_threads` / `get_thread` / `search_threads` / `get_pending_threads` - Browse conversations
+- `get_messages` / `get_chat_log` - History, with read receipts (`seen_since`)
+
+**Inbox and sharing**
+- `hide_thread` / `mark_thread_unread` / `mute_thread` / `unmute_thread`
+- `share_media` / `share_profile`
+
+### Idle nudges
+
+A quiet subscribed chat gets an `idle` event every `INSTAGRAM_IDLE_MINUTES` (5). Once it
+has been quiet for `INSTAGRAM_IDLE_BACKOFF_AFTER_MINUTES` (30), each nudge doubles the gap
+to the next, up to `INSTAGRAM_IDLE_MAX_MINUTES` (240). Any activity resets it.
 
 ## The `/dm` Skill - Autonomous Conversations
 
@@ -69,49 +80,65 @@ Now Claude can decide: engage with their "wait" or finish the thought.
 
 ## Setup
 
-1. Clone and install:
+1. Install:
    ```bash
-   git clone <repo>
-   cd instagram-mcp
    uv sync
    ```
 
-2. Create `.env`:
-   ```
-   INSTAGRAM_USERNAME=your_username
-   INSTAGRAM_PASSWORD=your_password
-   ```
-
-3. Login (handles 2FA):
+2. Log in once, in a normal terminal (the 2FA prompt needs a keyboard). It asks for the
+   username, the password (hidden) and the 2FA code, and saves `.instagram_session`:
    ```bash
-   uv run instagram-mcp-login
+   read "?Username: " U && read -s "?Password: " P && echo && INSTAGRAM_USERNAME="$U" INSTAGRAM_PASSWORD="$P" uv run instagram-mcp-login
    ```
 
-4. Run:
+3. Add the server to your project's `.mcp.json`:
+   ```json
+   {
+     "mcpServers": {
+       "instagram": {
+         "command": "uv",
+         "args": ["run", "--directory", "/path/to/instagram-mcp", "instagram-mcp"],
+         "env": { "INSTAGRAM_SUBSCRIBE": "ly=340282366841710300949128531777654287254" }
+       }
+     }
+   }
+   ```
+
+4. Start Claude Code with the channel enabled:
    ```bash
-   uv run instagram-mcp
+   claude --dangerously-load-development-channels server:instagram
    ```
 
-### Claude Desktop Config
+### Configuration
 
-```json
-{
-  "mcpServers": {
-    "instagram": {
-      "command": "uv",
-      "args": ["run", "instagram-mcp"],
-      "cwd": "/path/to/instagram-mcp"
-    }
-  }
-}
+| Variable | Default | |
+|---|---|---|
+| `INSTAGRAM_USERNAME` / `INSTAGRAM_PASSWORD` | | Only needed to log in |
+| `INSTAGRAM_SESSION_FILE` | `.instagram_session` | Saved session |
+| `INSTAGRAM_SUBSCRIBE` | | Chats to stream on start: `alias=thread_id,...` |
+| `INSTAGRAM_IDLE_MINUTES` | `5` | Quiet minutes before an idle nudge (0 disables) |
+| `INSTAGRAM_IDLE_BACKOFF_AFTER_MINUTES` | `30` | When nudges start backing off |
+| `INSTAGRAM_IDLE_MAX_MINUTES` | `240` | Longest gap between nudges |
+| `INSTAGRAM_CONTROL_THREAD` | | A chat whose messages become operator commands |
+| `INSTAGRAM_DEBUG_PREFIX` | `debug:` | Own messages with this prefix become operator commands |
+| `INSTAGRAM_TZ` | host zone | Time zone for the idle event's clock |
+| `INSTAGRAM_MEDIA_DIR` | `media` | Where `download_attachment` saves files |
+
+### E2E tests
+
+The e2e tests message between your account and a second test account. Log the test
+account in the same way, saving to `.instagram_session_bot2`:
+```bash
+read "?Bot username: " U && read -s "?Bot password: " P && echo && INSTAGRAM_USERNAME="$U" INSTAGRAM_PASSWORD="$P" INSTAGRAM_SESSION_FILE=.instagram_session_bot2 uv run instagram-mcp-login
 ```
+Then run `uv run pytest -m e2e`.
 
 ## Tech Stack
 
-- Python 3.13 + uv
-- FastMCP for Claude integration
-- instagrapi for Instagram API
-- 161 tests, 100% coverage
+- Python 3.14 + uv
+- MCP Python SDK 2 (`MCPServer`), pushing events as a Claude Code channel
+- instagrapi for the Instagram API, raw MQTToT for realtime
+- 361 unit and integration tests, plus a stdio wire test for the channel
 
 ## Disclaimer
 

@@ -7,19 +7,21 @@ including listing, searching, and modifying thread states.
 import logging
 from typing import TYPE_CHECKING, Any
 
+from mcp.types import ToolAnnotations
+
 if TYPE_CHECKING:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.mcpserver import MCPServer
 
     from instagram_mcp.client import InstagramClient
 
 logger = logging.getLogger("instagram_mcp")
 
 
-def register_thread_tools(mcp: "FastMCP", client: "InstagramClient") -> None:
+def register_thread_tools(mcp: MCPServer, client: InstagramClient) -> None:
     """Register thread management tools with the MCP server.
 
     Args:
-        mcp: FastMCP server instance.
+        mcp: MCP server instance.
         client: Instagram client instance.
     """
 
@@ -152,7 +154,7 @@ def register_thread_tools(mcp: "FastMCP", client: "InstagramClient") -> None:
             logger.exception("Error getting pending threads")
             return {"error": str(e)}
 
-    @mcp.tool(annotations={"destructive": True})
+    @mcp.tool(annotations=ToolAnnotations(destructive_hint=True))
     def hide_thread(thread_id: str) -> dict[str, Any]:
         """Hide/delete a thread from inbox.
 

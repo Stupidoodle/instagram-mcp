@@ -1,12 +1,13 @@
 """Shared pytest fixtures for Instagram MCP Server tests."""
 
+from collections.abc import Iterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from instagram_mcp.client import InstagramClient
 from instagram_mcp.config import Settings
@@ -17,6 +18,13 @@ from instagram_mcp.models.schemas import (
     MessageContent,
     ThreadUser,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_live_mqtt() -> Iterator[MagicMock]:
+    """create_server() must never open a real MQTT connection in tests."""
+    with patch("instagram_mcp.server.MQTTManager") as manager_class:
+        yield manager_class
 
 
 @pytest.fixture
@@ -180,9 +188,9 @@ def instagram_client(mock_instagrapi_client: MagicMock, tmp_path: Path) -> Insta
 
 
 @pytest.fixture
-def mock_mcp() -> FastMCP:
-    """Create a mock FastMCP server for testing tools."""
-    return FastMCP("test-server")
+def mock_mcp() -> MCPServer:
+    """Create an MCP server for testing tools."""
+    return MCPServer("test-server")
 
 
 def create_mock_tool_context() -> dict[str, Any]:

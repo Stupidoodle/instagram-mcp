@@ -6,21 +6,24 @@ session persistence and proper error handling for MCP server usage.
 
 import json
 import logging
+import shutil
+import subprocess
 import sys
+import tempfile
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+import httpx2
 from instagrapi import Client
 from instagrapi.exceptions import (
     BadPassword,
     ChallengeRequired,
+    ClientUnauthorizedError,
     LoginRequired,
     TwoFactorRequired,
 )
-from instagrapi.types import DirectMessage as IGDirectMessage
-from instagrapi.types import DirectThread as IGDirectThread
-from instagrapi.types import User as IGUser
 
 from instagram_mcp.models.schemas import (
     DirectMessage,
@@ -29,6 +32,11 @@ from instagram_mcp.models.schemas import (
     MessageContent,
     ThreadUser,
 )
+
+if TYPE_CHECKING:
+    from instagrapi.types import DirectMessage as IGDirectMessage
+    from instagrapi.types import DirectThread as IGDirectThread
+    from instagrapi.types import User as IGUser
 
 logger = logging.getLogger("instagram_mcp")
 
@@ -39,6 +47,7 @@ def _fix_instagrapi_extractors() -> None:
     Fixes:
     1. visual_media.expiring_media_action_summary.timestamp not converted from microseconds
     2. action_log.description not extracted to text field for action_log messages
+    3. extract_broadcast_channel crashes on missing pinned_channels_info
 
     This replaces the extractors entirely with fixed versions.
     """
@@ -51,8 +60,34 @@ def _fix_instagrapi_extractors() -> None:
         extract_media_v1,
         extract_media_v1_xma,
     )
+    from instagrapi.types import Broadcast, User
     from instagrapi.types import DirectMessage as IGDirectMessage
     from instagrapi.types import ReplyMessage
+
+    def fixed_extract_broadcast_channel(data: dict[str, Any]) -> list:
+        """Fixed version that handles missing pinned_channels_info."""
+        try:
+            channels = data["pinned_channels_info"]["pinned_channels_list"]
+            return [Broadcast(**channel) for channel in channels]
+        except (KeyError, TypeError):
+            return []
+
+    def fixed_extract_user_v1(data: dict[str, Any]) -> Any:
+        """Fixed version that provides defaults for missing required fields."""
+        data["broadcast_channel"] = fixed_extract_broadcast_channel(data)
+        data["external_url"] = data.get("external_url") or None
+        versions = data.get("hd_profile_pic_versions")
+        pic_hd = versions[-1] if versions else data.get("hd_profile_pic_url_info", {})
+        data["profile_pic_url_hd"] = pic_hd.get("url") if pic_hd else None
+        # Instagram API sometimes omits required fields — provide defaults
+        data.setdefault("full_name", data.get("username", ""))
+        data.setdefault("is_private", False)
+        data.setdefault("is_verified", False)
+        data.setdefault("media_count", 0)
+        data.setdefault("follower_count", 0)
+        data.setdefault("following_count", 0)
+        data.setdefault("is_business", False)
+        return User(**data)
 
     def fixed_extract_reply_message(data: dict[str, Any]) -> ReplyMessage:
         """Fixed version that converts all timestamp fields."""
@@ -133,9 +168,7 @@ def _fix_instagrapi_extractors() -> None:
             media = visual_media["media"]
             emas = media.get("expiring_media_action_summary")
             if emas and emas.get("timestamp"):
-                emas["timestamp"] = dt.datetime.fromtimestamp(
-                    int(emas["timestamp"]) // 1_000_000
-                )
+                emas["timestamp"] = dt.datetime.fromtimestamp(int(emas["timestamp"]) // 1_000_000)
             # Convert image candidates URL expiration timestamps
             img_versions = media.get("image_versions2")
             if img_versions:
@@ -157,9 +190,7 @@ def _fix_instagrapi_extractors() -> None:
         if visual_media:
             emas = visual_media.get("expiring_media_action_summary")
             if emas and emas.get("timestamp"):
-                emas["timestamp"] = dt.datetime.fromtimestamp(
-                    int(emas["timestamp"]) // 1_000_000
-                )
+                emas["timestamp"] = dt.datetime.fromtimestamp(int(emas["timestamp"]) // 1_000_000)
 
         # FIX: Extract action_log description to text field
         action_log = data.get("action_log")
@@ -171,13 +202,63 @@ def _fix_instagrapi_extractors() -> None:
         return IGDirectMessage(**data)
 
     # Replace the broken extractors
+    extractors.extract_broadcast_channel = fixed_extract_broadcast_channel
+    extractors.extract_user_v1 = fixed_extract_user_v1
     extractors.extract_reply_message = fixed_extract_reply_message
     extractors.extract_direct_message = fixed_extract_direct_message
+
+    # Also patch modules that imported the functions directly (local binding)
+    from instagrapi.mixins import user as user_mixin
+
+    user_mixin.extract_user_v1 = fixed_extract_user_v1
     logger.debug("Replaced instagrapi extractors with fixed versions")
 
 
-# Apply fix when module loads
+def _relax_optional_model_fields() -> None:
+    """Make over-strict instagrapi model fields optional at runtime.
+
+    Vanilla instagrapi declares some fields required that Instagram often omits,
+    so a whole thread/message fails Pydantic validation (e.g. list_threads dies
+    with ``generic_xma.0.video_url Field required``). We relax those fields here
+    instead of hand-editing site-packages, so the fix survives ``uv sync``.
+    """
+    import pydantic
+
+    from instagrapi import types as ig_types
+
+    # (model, field): fields Instagram may leave out but instagrapi marks required.
+    relaxations = [
+        (ig_types.MediaXma, "video_url"),
+    ]
+    changed = False
+    for model, field_name in relaxations:
+        field = getattr(model, "model_fields", {}).get(field_name)
+        if field is None or not field.is_required():
+            continue
+        field.default = None  # a non-Undefined default makes the field optional
+        model.model_rebuild(force=True)
+        changed = True
+        logger.debug("Relaxed %s.%s to optional", model.__name__, field_name)
+
+    # Pydantic compiles a child model's schema INTO each parent, so relaxing MediaXma
+    # above doesn't change DirectMessage (which embeds it) until the parents are also
+    # rebuilt. Force-rebuild every instagrapi model so parents pick up the new child.
+    if changed:
+        for name in dir(ig_types):
+            obj = getattr(ig_types, name)
+            if not (isinstance(obj, type) and issubclass(obj, pydantic.BaseModel)):
+                continue
+            if obj.__module__ != ig_types.__name__:
+                continue  # skip imported bases (pydantic.BaseModel etc.)
+            try:
+                obj.model_rebuild(force=True)
+            except Exception:  # noqa: BLE001 - a model that can't rebuild isn't our target
+                logger.debug("Skipped rebuild of %s", obj.__name__)
+
+
+# Apply fixes when module loads
 _fix_instagrapi_extractors()
+_relax_optional_model_fields()
 
 
 class InstagramClientError(Exception):
@@ -385,15 +466,118 @@ class InstagramClient:
         session_file: Path to the session file for persistence.
     """
 
-    def __init__(self, session_file: Path | None = None) -> None:
+    def __init__(
+        self,
+        session_file: Path | None = None,
+        app_version: str | None = None,
+    ) -> None:
         """Initialize the Instagram client.
 
         Args:
             session_file: Path to store/load session data.
+            app_version: Instagram app version to emulate. When set, overrides
+                the version in both fresh clients and loaded sessions. This
+                prevents Instagram's ``unsupported_version`` challenge block.
         """
         self.client = Client()
+        # Override default challenge_code_handler which calls input() —
+        # that would corrupt JSON-RPC on the MCP server's stdio transport.
+        self.client.challenge_code_handler = self._challenge_code_handler
         self.session_file = session_file or Path(".instagram_session")
         self._logged_in = False
+        self._app_version = app_version
+        # Patch instagrapi's requests Session with a default 30s timeout.
+        # Without this, HTTP calls can block forever if Instagram stalls
+        # the connection (silent rate limit after rapid-fire calls).
+        self._patch_request_timeout(30)
+        if app_version:
+            self._apply_app_version(app_version)
+
+    @staticmethod
+    def _challenge_code_handler(username: str, choice: Any = None) -> str:
+        """No-op challenge handler that prevents stdin reads.
+
+        The default instagrapi handler calls input() which blocks and corrupts
+        the MCP server's JSON-RPC stdio transport. This raises immediately.
+        """
+        raise ChallengeRequired(
+            f"Challenge required for {username} (method: {choice}). "
+            "Run 'instagram-mcp-login' to resolve interactively."
+        )
+
+    def _patch_request_timeout(self, timeout: int) -> None:
+        """Patch the instagrapi HTTP session with a default socket timeout.
+
+        instagrapi's ``private.post()``/``private.get()`` calls never pass a
+        ``timeout`` to the underlying ``requests`` library, so they default to
+        ``None`` (wait forever).  After rapid-fire calls Instagram may stall the
+        TCP connection instead of returning 429, causing a permanent hang.
+
+        This patches ``Session.request`` so every HTTP call has a ceiling.
+        """
+        session = self.client.private
+        original_request = session.request
+
+        def _request_with_timeout(*args: Any, **kwargs: Any) -> Any:
+            kwargs.setdefault("timeout", timeout)
+            return original_request(*args, **kwargs)
+
+        session.request = _request_with_timeout  # type: ignore[assignment]
+
+    def _apply_app_version(self, version: str) -> None:
+        """Patch the instagrapi client to emulate a specific Instagram app version.
+
+        Updates device_settings.app_version and the User-Agent string to match,
+        preventing Instagram's ``unsupported_version`` challenge block.
+        """
+        settings = self.client.get_settings()
+        old_version = settings.get("device_settings", {}).get("app_version", "")
+        if old_version == version:
+            return
+
+        settings.setdefault("device_settings", {})["app_version"] = version
+
+        old_ua = settings.get("user_agent", "")
+        if old_version and old_version in old_ua:
+            settings["user_agent"] = old_ua.replace(old_version, version)
+
+        self.client.set_settings(settings)
+        logger.info("App version updated: %s -> %s", old_version, version)
+
+    def _retry_on_rate_limit(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
+        """Execute operation with exponential backoff on rate limit errors.
+
+        Retries up to 5 times with delay doubling each attempt, capped at 30s.
+        Catches HTTP 467 (Instagram-specific), 429 (standard), and request
+        timeouts (from the 30s socket ceiling).  After max retries, raises.
+        """
+        max_delay = 30.0
+        max_retries = 5
+        attempt = 0
+        while True:
+            try:
+                return operation(*args, **kwargs)
+            except Exception as e:
+                error_str = str(e)
+                is_rate_limit = "467" in error_str or "429" in error_str
+                is_timeout = "timeout" in error_str.lower() or "timed out" in error_str.lower()
+                if not is_rate_limit and not is_timeout:
+                    raise
+                attempt += 1
+                if attempt > max_retries:
+                    logger.error(
+                        "Max retries (%d) exceeded: %s", max_retries, e,
+                    )
+                    raise
+                backoff = min(2 ** (attempt - 1), max_delay)
+                logger.warning(
+                    "Rate limited/timeout, retry in %.0fs (attempt %d/%d): %s",
+                    backoff,
+                    attempt,
+                    max_retries,
+                    e,
+                )
+                time.sleep(backoff)
 
     @property
     def is_logged_in(self) -> bool:
@@ -420,6 +604,8 @@ class InstagramClient:
         try:
             session_data = json.loads(self.session_file.read_text())
             self.client.set_settings(session_data)
+            if self._app_version:
+                self._apply_app_version(self._app_version)
             auth_data = session_data.get("authorization_data", {})
             session_id = auth_data.get("sessionid", "")
             self.client.login_by_sessionid(session_id)
@@ -431,6 +617,14 @@ class InstagramClient:
         except LoginRequired as e:
             logger.warning("Session expired, need to re-login")
             raise SessionError("Session expired") from e
+        except (ChallengeRequired, ClientUnauthorizedError) as e:
+            logger.warning("Session challenged/unauthorized by Instagram, deleting stale session")
+            self.session_file.unlink(missing_ok=True)
+            raise SessionError(
+                "Session challenged by Instagram. Stale session deleted. "
+                "Resolve any 'Was this you?' prompts in the Instagram app, "
+                "then run 'instagram-mcp-login' to re-authenticate."
+            ) from e
 
     def save_session(self) -> None:
         """Save current session to file.
@@ -472,17 +666,34 @@ class InstagramClient:
         except TwoFactorRequired as e:
             if verification_code_handler:
                 code = verification_code_handler()
-                # Pass verification_code to login method directly
-                self.client.login(username, password, verification_code=code)
-                self._logged_in = True
-                self.save_session()
+                try:
+                    self.client.login(username, password, verification_code=code)
+                    self._logged_in = True
+                    self.save_session()
+                except ChallengeRequired as ce:
+                    # Auth succeeded but login_flow() got challenged (e.g. get_reels_tray_feed).
+                    # Try saving the session anyway — the auth token may still be valid.
+                    try:
+                        self.save_session()
+                        logger.warning(
+                            "Challenge during login_flow() after 2FA — session saved, "
+                            "but may need app confirmation"
+                        )
+                    except SessionError:
+                        pass
+                    raise AuthenticationError(
+                        "Login succeeded but Instagram challenged a post-login request. "
+                        "Check your Instagram app for 'Was this you?' prompts, approve it, "
+                        "then try again. Session was saved and may work on next startup."
+                    ) from ce
             else:
                 raise AuthenticationError(
                     "2FA required. Run 'instagram-mcp-login' to authenticate interactively."
                 ) from e
         except ChallengeRequired as e:
             raise AuthenticationError(
-                f"Challenge required: {e}. Please login via Instagram app first."
+                f"Challenge required: {e}. Check your Instagram app for 'Was this you?' "
+                "prompts, approve it, wait a minute, then try again."
             ) from e
 
     def login_or_load_session(self, username: str, password: str) -> None:
@@ -526,7 +737,9 @@ class InstagramClient:
         Returns:
             DirectThread: Thread model with messages.
         """
-        thread = self.client.direct_thread(thread_id=int(thread_id), amount=amount)
+        thread = self._retry_on_rate_limit(
+            self.client.direct_thread, thread_id=int(thread_id), amount=amount
+        )
         viewer_id = str(self.client.user_id) if self.client.user_id else None
         return _convert_thread(thread, include_messages=True, viewer_id=viewer_id)
 
@@ -665,7 +878,9 @@ class InstagramClient:
             list[DirectMessage]: List of message models.
         """
         # Fetch thread to get user info for sender lookup and seen status
-        thread = self.client.direct_thread(thread_id=int(thread_id), amount=amount)
+        thread = self._retry_on_rate_limit(
+            self.client.direct_thread, thread_id=int(thread_id), amount=amount
+        )
         users = [_convert_user(user) for user in thread.users] if thread.users else []
         users_by_id = {u.user_id: u for u in users}
         last_seen_at = getattr(thread, "last_seen_at", None)
@@ -676,6 +891,34 @@ class InstagramClient:
             _convert_message(msg, thread_id, users_by_id, last_seen_at, viewer_id)
             for msg in messages
         ]
+
+    def get_seq_id(self) -> int:
+        """Get the Iris sequence ID for MQTT subscription.
+
+        Returns:
+            The current seq_id from Instagram's direct_v2/inbox/ endpoint.
+        """
+        result = self._retry_on_rate_limit(
+            self.client.private_request, "direct_v2/inbox/", params={"limit": "1"}
+        )
+        return int(result.get("seq_id", 0))
+
+    def get_iris_info(self) -> dict:
+        """Get Iris subscription info from the inbox endpoint.
+
+        Returns:
+            Dict with 'seq_id', 'snapshot_at_ms', and 'app_version'.
+        """
+        result = self._retry_on_rate_limit(
+            self.client.private_request, "direct_v2/inbox/", params={"limit": "1"}
+        )
+        return {
+            "seq_id": int(result.get("seq_id", 0)),
+            "snapshot_at_ms": int(result.get("snapshot_at_ms", 0)),
+            "app_version": self.client.settings.get("device_settings", {}).get(
+                "app_version", "415.0.0.36.76"
+            ),
+        }
 
     def delete_message(self, thread_id: str, message_id: str) -> bool:
         """Delete a message from a thread.
@@ -688,8 +931,100 @@ class InstagramClient:
             bool: True if successful.
         """
         return bool(
-            self.client.direct_message_delete(thread_id=int(thread_id), message_id=int(message_id))
+            self.client.direct_message_delete(
+                thread_id=int(thread_id), message_id=int(message_id)
+            )
         )
+
+    def react(self, thread_id: str, message_id: str, emoji: str, *, remove: bool = False) -> bool:
+        """Add or remove the viewer's emoji reaction on a message.
+
+        Args:
+            thread_id: ID of the thread.
+            message_id: ID of the message to react to.
+            emoji: The emoji (for a removal: the one being removed).
+            remove: Remove the reaction instead of adding it.
+
+        Returns:
+            bool: True if successful.
+        """
+        action = self.client.direct_delete_reaction if remove else self.client.direct_send_reaction
+        return bool(self._retry_on_rate_limit(action, int(thread_id), int(message_id), emoji=emoji))
+
+    def mark_seen(self, thread_id: str, message_id: str) -> bool:
+        """Send a read receipt up to a message.
+
+        Args:
+            thread_id: ID of the thread.
+            message_id: ID of the newest message being marked seen.
+
+        Returns:
+            bool: True if successful.
+        """
+        return bool(
+            self._retry_on_rate_limit(
+                self.client.direct_message_seen, int(thread_id), int(message_id)
+            )
+        )
+
+    def download_message_media(self, thread_id: str, message_id: str, folder: Path) -> Path:
+        """Download the photo, video or voice clip of a message.
+
+        View-once media is refused: it was meant to be seen once, on the phone.
+
+        Args:
+            thread_id: ID of the thread.
+            message_id: ID of the message with the media.
+            folder: Where to save the file.
+
+        Returns:
+            Path: The downloaded file.
+
+        Raises:
+            InstagramClientError: If the message isn't found, is view-once, or has no media.
+        """
+        thread = self._retry_on_rate_limit(
+            self.client.direct_thread, thread_id=int(thread_id), amount=50
+        )
+        item = next((m for m in thread.messages or [] if str(m.id) == message_id), None)
+        if item is None:
+            msg = f"message {message_id} not in the latest 50 of this thread"
+            raise InstagramClientError(msg)
+        if item.item_type == "raven_media":
+            msg = "view-once media isn't downloadable"
+            raise InstagramClientError(msg)
+        media = item.media
+        url = media and (media.video_url or media.audio_url or media.thumbnail_url)
+        if not url:
+            msg = f"message {message_id} ({item.item_type}) has no downloadable media"
+            raise InstagramClientError(msg)
+        response = httpx2.get(str(url), timeout=60, follow_redirects=True)
+        response.raise_for_status()
+        suffix = _suffix_for(response.headers.get("content-type", ""), str(url))
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{thread_id[-6:]}-{message_id}{suffix}"
+        path.write_bytes(response.content)
+        return path
+
+    def send_voice(self, path: Path, thread_id: str) -> DirectMessage | None:
+        """Send an audio file as a voice message.
+
+        Instagram only accepts AAC in an MP4 container, so anything else is
+        converted with ffmpeg first.
+
+        Args:
+            path: Path to the audio file.
+            thread_id: ID of the thread.
+
+        Returns:
+            DirectMessage: The sent message, or None if failed.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            clip = path if path.suffix.lower() == ".m4a" else _to_m4a(path, Path(tmp))
+            result = self.client.direct_send_voice(path=clip, thread_ids=[int(thread_id)])
+        if result:
+            return _convert_message(result, thread_id)
+        return None
 
     # Media operations
     def send_photo(
@@ -805,20 +1140,66 @@ class InstagramClient:
         )
 
 
+_SUFFIXES = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/heic": ".heic",
+    "video/mp4": ".mp4",
+    "audio/mp4": ".m4a",
+    "audio/mpeg": ".mp3",
+    "audio/ogg": ".ogg",
+}
+
+
+def _suffix_for(content_type: str, url: str) -> str:
+    """File suffix from the response type, else from the URL path."""
+    known = _SUFFIXES.get(content_type.split(";", 1)[0].strip())
+    if known:
+        return known
+    return Path(httpx2.URL(url).path).suffix or ".bin"
+
+
+def _to_m4a(source: Path, folder: Path) -> Path:
+    """Convert an audio file to AAC in an MP4 container with ffmpeg."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        msg = "ffmpeg is needed to convert voice messages to .m4a"
+        raise InstagramClientError(msg)
+    target = folder / f"{source.stem}.m4a"
+    argv = [ffmpeg, "-y", "-loglevel", "error", "-i", str(source)]
+    argv += ["-c:a", "aac", "-b:a", "64k", str(target)]
+    subprocess.run(argv, check=True, capture_output=True)  # noqa: S603 - fixed argv, file paths
+
+    return target
+
+
 def interactive_login() -> None:
     """Interactive login command for initial authentication.
 
-    This function handles 2FA interactively via stdin/stdout and saves
-    the session for later use by the MCP server.
+    This function handles 2FA and challenge codes interactively via
+    stdin/stdout and saves the session for later use by the MCP server.
     """
     from instagram_mcp.config import get_settings, setup_logging
 
     settings = get_settings()
     setup_logging(settings.log_level)
 
-    client = InstagramClient(session_file=settings.instagram_session_file)
+    client = InstagramClient(
+        session_file=settings.instagram_session_file,
+        app_version=settings.instagram_app_version,
+    )
+
+    # Delete stale session to avoid ChallengeRequired from old session data
+    if settings.instagram_session_file.exists():
+        print(
+            f"Removing old session file: {settings.instagram_session_file}",
+            file=sys.stderr,
+        )
+        settings.instagram_session_file.unlink()
 
     print("Instagram MCP - Interactive Login", file=sys.stderr)
+    print(f"App version: {settings.instagram_app_version}", file=sys.stderr)
     print("=" * 40, file=sys.stderr)
 
     def get_2fa_code() -> str:
@@ -827,6 +1208,23 @@ def interactive_login() -> None:
         sys.stderr.flush()
         return input().strip()
 
+    def get_challenge_code(username: str, choice: Any = None) -> str:
+        """Prompt for Instagram challenge code via stdin."""
+        print(
+            f"\nChallenge required for {username}!",
+            file=sys.stderr,
+        )
+        print(
+            f"Instagram sent a security code via {choice or 'email/SMS'}.",
+            file=sys.stderr,
+        )
+        print("Enter challenge code: ", end="", file=sys.stderr)
+        sys.stderr.flush()
+        return input().strip()
+
+    # Override challenge handler for interactive use
+    client.client.challenge_code_handler = get_challenge_code
+
     try:
         client.login(
             username=settings.instagram_username,
@@ -834,11 +1232,11 @@ def interactive_login() -> None:
             verification_code_handler=get_2fa_code,
         )
         print(
-            f"Login successful! Session saved to {settings.instagram_session_file}",
+            f"\nLogin successful! Session saved to {settings.instagram_session_file}",
             file=sys.stderr,
         )
     except AuthenticationError as e:
-        print(f"Login failed: {e}", file=sys.stderr)
+        print(f"\nLogin failed: {e}", file=sys.stderr)
         sys.exit(1)
 
 

@@ -1,7 +1,9 @@
 # Instagram MCP Server - Claude Guidelines
 
 ## Project Overview
-Enterprise-grade Python MCP server for Instagram Direct Message handling using instagrapi.
+Python MCP server for Instagram DMs using instagrapi. Realtime events arrive over
+Instagram's MQTT connection and are pushed into the Claude Code session as a channel
+(`notifications/claude/channel`); nothing polls.
 
 ## Dependency Management
 - NEVER manually edit pyproject.toml for dependencies
@@ -15,7 +17,8 @@ Enterprise-grade Python MCP server for Instagram Direct Message handling using i
 - Use `logging` module with stderr handler instead
 - All tools must have proper docstrings (they become MCP tool descriptions)
 - Handle errors gracefully - return error messages, don't crash
-- Use FastMCP decorator pattern for tool registration
+- Use the `MCPServer` decorator pattern for tool registration (mcp 2.x; FastMCP is gone)
+- Never add a blocking "wait for reply" tool: events are pushed by `channel.py`
 
 ## Code Quality
 - Run `uv run ruff check .` before committing
@@ -43,14 +46,17 @@ Enterprise-grade Python MCP server for Instagram Direct Message handling using i
 ```
 src/instagram_mcp/
 ├── __init__.py
-├── server.py           # MCP server entry point
+├── server.py           # MCP server entry point, wires client + MQTT + channel
+├── channel.py          # Claude Code channel: aliases, event push, idle nudges
 ├── client.py           # Instagram client wrapper
 ├── config.py           # Configuration management
+├── mqtt/               # MQTToT realtime: connection, parser, manager (listener + watchdog)
 ├── tools/
 │   ├── __init__.py
+│   ├── channel.py      # Channel tools (same names as the WhatsApp channel)
 │   ├── threads.py      # Thread management tools
-│   ├── messages.py     # Message operations
-│   └── media.py        # Media messaging
+│   ├── messages.py     # Message history tools
+│   └── media.py        # Sharing tools
 └── models/
     ├── __init__.py
     └── schemas.py      # Pydantic models
@@ -58,15 +64,17 @@ src/instagram_mcp/
 
 ## Environment Variables
 ```
-INSTAGRAM_USERNAME=     # Required
-INSTAGRAM_PASSWORD=     # Required
-INSTAGRAM_2FA_CODE=     # Optional, for 2FA
+INSTAGRAM_USERNAME=     # Needed to log in
+INSTAGRAM_PASSWORD=     # Needed to log in
 INSTAGRAM_SESSION_FILE= # Optional, defaults to .instagram_session
+INSTAGRAM_SUBSCRIBE=    # Chats to stream on start: alias=thread_id,...
+INSTAGRAM_IDLE_MINUTES= # Idle nudge threshold (5; 0 disables), backs off after 30 min
 ```
+See README.md for the full list.
 
 ## Running the Server
 ```bash
-uv run python -m instagram_mcp.server
+uv run instagram-mcp   # stdio; in Claude Code: --dangerously-load-development-channels server:instagram
 ```
 
 ## Common Commands

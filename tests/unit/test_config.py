@@ -36,6 +36,7 @@ class TestSettings:
 
         assert settings.instagram_session_file == Path(".instagram_session")
         assert settings.log_level == "INFO"
+        assert settings.instagram_app_version == "415.0.0.36.76"
 
     def test_settings_custom_values(self) -> None:
         with patch.dict(
@@ -44,6 +45,7 @@ class TestSettings:
                 "INSTAGRAM_USERNAME": "test_user",
                 "INSTAGRAM_PASSWORD": "test_pass",
                 "INSTAGRAM_SESSION_FILE": "/custom/path",
+                "INSTAGRAM_APP_VERSION": "420.0.0.1.2",
                 "LOG_LEVEL": "DEBUG",
             },
         ):
@@ -51,6 +53,7 @@ class TestSettings:
 
         assert settings.instagram_session_file == Path("/custom/path")
         assert settings.log_level == "DEBUG"
+        assert settings.instagram_app_version == "420.0.0.1.2"
 
     def test_settings_missing_username(self) -> None:
         # Use _env_file=None to prevent loading from .env file
@@ -134,3 +137,14 @@ class TestSetupLogging:
         # Handler should write to stderr, not stdout
         handler = logger.handlers[0]
         assert isinstance(handler, logging.StreamHandler)
+
+
+class TestSubscriptions:
+    def test_parse_aliases_and_bare_ids(self, mock_settings: Settings) -> None:
+        settings = mock_settings.model_copy(
+            update={"instagram_subscribe": "ly=111, 222 ,,mika = 333"}
+        )
+        assert settings.subscriptions() == [("ly", "111"), (None, "222"), ("mika", "333")]
+
+    def test_empty(self, mock_settings: Settings) -> None:
+        assert mock_settings.subscriptions() == []

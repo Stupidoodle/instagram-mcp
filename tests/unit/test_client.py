@@ -1,6 +1,7 @@
 """Unit tests for Instagram client wrapper."""
 
 import json
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -8,6 +9,7 @@ import pytest
 from instagrapi.exceptions import BadPassword, ChallengeRequired, TwoFactorRequired
 
 from instagram_mcp.client import (
+    InstagramClientError,
     AuthenticationError,
     InstagramClient,
     SessionError,
@@ -131,9 +133,7 @@ class TestConvertMessage:
         assert msg.sender.user_id == "0"
         assert msg.sender.username == "unknown"
 
-    def test_convert_message_is_sent_by_viewer_none(
-        self, mock_ig_message: MagicMock
-    ) -> None:
+    def test_convert_message_is_sent_by_viewer_none(self, mock_ig_message: MagicMock) -> None:
         mock_ig_message.is_sent_by_viewer = None
 
         msg = _convert_message(mock_ig_message, "123456789")
@@ -224,9 +224,7 @@ class TestInstagramClient:
 
         assert result is False
 
-    def test_load_session_success(
-        self, tmp_path: Path, mock_instagrapi_client: MagicMock
-    ) -> None:
+    def test_load_session_success(self, tmp_path: Path, mock_instagrapi_client: MagicMock) -> None:
         session_file = tmp_path / "session"
         session_data = {"authorization_data": {"sessionid": "test_session"}}
         session_file.write_text(json.dumps(session_data))
@@ -248,9 +246,7 @@ class TestInstagramClient:
         with pytest.raises(SessionError, match="Invalid session file format"):
             client.load_session()
 
-    def test_save_session(
-        self, tmp_path: Path, mock_instagrapi_client: MagicMock
-    ) -> None:
+    def test_save_session(self, tmp_path: Path, mock_instagrapi_client: MagicMock) -> None:
         session_file = tmp_path / "session"
 
         with patch("instagram_mcp.client.Client", return_value=mock_instagrapi_client):
@@ -261,9 +257,7 @@ class TestInstagramClient:
         # Check file permissions are restrictive
         assert (session_file.stat().st_mode & 0o777) == 0o600
 
-    def test_login_success(
-        self, tmp_path: Path, mock_instagrapi_client: MagicMock
-    ) -> None:
+    def test_login_success(self, tmp_path: Path, mock_instagrapi_client: MagicMock) -> None:
         with patch("instagram_mcp.client.Client", return_value=mock_instagrapi_client):
             client = InstagramClient(session_file=tmp_path / "session")
             client.login("test_user", "test_pass")
@@ -271,9 +265,7 @@ class TestInstagramClient:
         assert client.is_logged_in is True
         mock_instagrapi_client.login.assert_called_once_with("test_user", "test_pass")
 
-    def test_login_bad_password(
-        self, tmp_path: Path, mock_instagrapi_client: MagicMock
-    ) -> None:
+    def test_login_bad_password(self, tmp_path: Path, mock_instagrapi_client: MagicMock) -> None:
         mock_instagrapi_client.login.side_effect = BadPassword()
 
         with patch("instagram_mcp.client.Client", return_value=mock_instagrapi_client):
@@ -343,6 +335,85 @@ class TestInstagramClient:
         mock_instagrapi_client.login.assert_called_once()
 
 
+class TestAppVersion:
+    """Tests for Instagram app version management."""
+
+    def test_init_with_app_version(self, tmp_path: Path) -> None:
+        """Test that passing app_version applies it on init."""
+        mock_client = MagicMock()
+        mock_client.get_settings.return_value = {
+            "device_settings": {"app_version": "269.0.0.18.75"},
+            "user_agent": "Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; 6T Dev; devitron; qcom; en_US; 314665256)",
+        }
+        with patch("instagram_mcp.client.Client", return_value=mock_client):
+            client = InstagramClient(
+                session_file=tmp_path / "session",
+                app_version="415.0.0.36.76",
+            )
+
+        assert client._app_version == "415.0.0.36.76"
+        # set_settings should have been called with the updated version
+        call_args = mock_client.set_settings.call_args[0][0]
+        assert call_args["device_settings"]["app_version"] == "415.0.0.36.76"
+        assert "415.0.0.36.76" in call_args["user_agent"]
+        assert "269.0.0.18.75" not in call_args["user_agent"]
+
+    def test_init_without_app_version(self, tmp_path: Path) -> None:
+        """Test that omitting app_version leaves client defaults alone."""
+        mock_client = MagicMock()
+        with patch("instagram_mcp.client.Client", return_value=mock_client):
+            client = InstagramClient(session_file=tmp_path / "session")
+
+        assert client._app_version is None
+        # get_settings should NOT be called for version patching
+        mock_client.get_settings.assert_not_called()
+
+    def test_load_session_applies_version(
+        self, tmp_path: Path, mock_instagrapi_client: MagicMock
+    ) -> None:
+        """Test that loading a session with old version gets patched."""
+        session_file = tmp_path / "session"
+        session_data = {"authorization_data": {"sessionid": "test_session"}}
+        session_file.write_text(json.dumps(session_data))
+
+        mock_instagrapi_client.get_settings.return_value = {
+            "device_settings": {"app_version": "269.0.0.18.75"},
+            "user_agent": "Instagram 269.0.0.18.75 Android (...)",
+        }
+
+        with patch("instagram_mcp.client.Client", return_value=mock_instagrapi_client):
+            client = InstagramClient(
+                session_file=session_file,
+                app_version="415.0.0.36.76",
+            )
+            client.load_session()
+
+        # set_settings called during load_session to patch version
+        calls = mock_instagrapi_client.set_settings.call_args_list
+        # Find the call that has the new version (may be init or load_session)
+        patched = any(
+            c[0][0].get("device_settings", {}).get("app_version") == "415.0.0.36.76" for c in calls
+        )
+        assert patched
+
+    def test_apply_app_version_noop_when_same(self, tmp_path: Path) -> None:
+        """Test that _apply_app_version is a no-op when version matches."""
+        mock_client = MagicMock()
+        mock_client.get_settings.return_value = {
+            "device_settings": {"app_version": "415.0.0.36.76"},
+            "user_agent": "Instagram 415.0.0.36.76 Android (...)",
+        }
+        with patch("instagram_mcp.client.Client", return_value=mock_client):
+            client = InstagramClient(
+                session_file=tmp_path / "session",
+                app_version="415.0.0.36.76",
+            )
+
+        # get_settings called once (in _apply_app_version), but set_settings NOT called
+        # because version already matches
+        mock_client.set_settings.assert_not_called()
+
+
 class TestInstagramClientThreadOperations:
     def test_get_threads(
         self, instagram_client: InstagramClient, mock_ig_thread: MagicMock
@@ -355,9 +426,7 @@ class TestInstagramClientThreadOperations:
         assert threads[0].thread_id == "123456789"
         instagram_client.client.direct_threads.assert_called_once_with(amount=10)
 
-    def test_get_thread(
-        self, instagram_client: InstagramClient, mock_ig_thread: MagicMock
-    ) -> None:
+    def test_get_thread(self, instagram_client: InstagramClient, mock_ig_thread: MagicMock) -> None:
         instagram_client.client.direct_thread.return_value = mock_ig_thread
 
         thread = instagram_client.get_thread("123456789", amount=20)
@@ -530,9 +599,7 @@ class TestInstagramClientMediaOperations:
     def test_share_profile(self, instagram_client: InstagramClient) -> None:
         instagram_client.client.direct_profile_share.return_value = True
 
-        result = instagram_client.share_profile(
-            "444444444", target_user_ids=["123"]
-        )
+        result = instagram_client.share_profile("444444444", target_user_ids=["123"])
 
         assert result is True
         instagram_client.client.direct_profile_share.assert_called_once()
@@ -568,3 +635,222 @@ class TestInteractiveLogin:
         assert exc_info.value.code == 1
 
 
+class TestRetryOnRateLimit:
+    """Tests for _retry_on_rate_limit exponential backoff."""
+
+    def test_retries_on_467_then_succeeds(self, instagram_client: InstagramClient) -> None:
+        """Test that 467 errors trigger retry and eventual success."""
+        mock_thread = MagicMock()
+        mock_thread.users = []
+        mock_thread.messages = []
+        mock_thread.last_seen_at = None
+
+        instagram_client.client.direct_thread.side_effect = [
+            Exception("467 Client Error: - for url: https://..."),
+            Exception("467 Client Error: - for url: https://..."),
+            mock_thread,
+        ]
+
+        with patch("instagram_mcp.client.time.sleep") as mock_sleep:
+            messages = instagram_client.get_messages("123456789", amount=5)
+
+        assert messages == []
+        assert instagram_client.client.direct_thread.call_count == 3
+        # Backoff: 1s, 2s
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(1)
+        mock_sleep.assert_any_call(2)
+
+    def test_backoff_caps_at_30_seconds(self, instagram_client: InstagramClient) -> None:
+        """Test that backoff delay caps at 30s and retries cap at 5."""
+        mock_thread = MagicMock()
+        mock_thread.users = []
+        mock_thread.messages = []
+        mock_thread.last_seen_at = None
+
+        # 4 failures then success (within max_retries=5)
+        instagram_client.client.direct_thread.side_effect = [
+            *[Exception("467 Client Error") for _ in range(4)],
+            mock_thread,
+        ]
+
+        with patch("instagram_mcp.client.time.sleep") as mock_sleep:
+            instagram_client.get_messages("123456789", amount=5)
+
+        assert mock_sleep.call_count == 4
+        delays = [call.args[0] for call in mock_sleep.call_args_list]
+        assert delays == [1, 2, 4, 8]
+
+    def test_max_retries_exceeded_raises(self, instagram_client: InstagramClient) -> None:
+        """Test that after 5 retries the error is raised, not retried forever."""
+        instagram_client.client.direct_thread.side_effect = [
+            Exception("467 Client Error") for _ in range(10)
+        ]
+
+        with patch("instagram_mcp.client.time.sleep"):
+            with pytest.raises(Exception, match="467 Client Error"):
+                instagram_client.get_messages("123456789", amount=5)
+
+        # 1 initial + 5 retries = 6 total calls
+        assert instagram_client.client.direct_thread.call_count == 6
+
+    def test_timeout_errors_are_retried(self, instagram_client: InstagramClient) -> None:
+        """Test that request timeouts are retried like rate limits."""
+        mock_thread = MagicMock()
+        mock_thread.users = []
+        mock_thread.messages = []
+        mock_thread.last_seen_at = None
+
+        instagram_client.client.direct_thread.side_effect = [
+            Exception("Read timed out"),
+            mock_thread,
+        ]
+
+        with patch("instagram_mcp.client.time.sleep"):
+            messages = instagram_client.get_messages("123456789", amount=5)
+
+        assert messages == []
+        assert instagram_client.client.direct_thread.call_count == 2
+
+    def test_non_rate_limit_errors_raise_immediately(
+        self, instagram_client: InstagramClient
+    ) -> None:
+        """Test that non-467/429/timeout errors are not retried."""
+        instagram_client.client.direct_thread.side_effect = Exception("Connection refused")
+
+        with pytest.raises(Exception, match="Connection refused"):
+            instagram_client.get_messages("123456789", amount=5)
+
+        assert instagram_client.client.direct_thread.call_count == 1
+
+    def test_retries_on_429(self, instagram_client: InstagramClient) -> None:
+        """Test that HTTP 429 also triggers retry."""
+        mock_thread = MagicMock()
+        mock_thread.users = []
+        mock_thread.messages = []
+        mock_thread.last_seen_at = None
+
+        instagram_client.client.direct_thread.side_effect = [
+            Exception("429 Too Many Requests"),
+            mock_thread,
+        ]
+
+        with patch("instagram_mcp.client.time.sleep"):
+            messages = instagram_client.get_messages("123456789", amount=5)
+
+        assert messages == []
+        assert instagram_client.client.direct_thread.call_count == 2
+
+
+def _ig_message(mid: str, item_type: str, **media: str | None) -> MagicMock:
+    item = MagicMock(id=mid, item_type=item_type)
+    item.media = (
+        MagicMock(**{"video_url": None, "audio_url": None, "thumbnail_url": None} | media)
+        if media
+        else None
+    )
+    return item
+
+
+class TestChannelClientMethods:
+    def test_react_and_remove(self, instagram_client: InstagramClient) -> None:
+        ig = instagram_client.client
+        ig.direct_send_reaction.return_value = True
+        ig.direct_delete_reaction.return_value = True
+        assert instagram_client.react("111", "222", "🔥") is True
+        ig.direct_send_reaction.assert_called_once_with(111, 222, emoji="🔥")
+        assert instagram_client.react("111", "222", "🔥", remove=True) is True
+        ig.direct_delete_reaction.assert_called_once_with(111, 222, emoji="🔥")
+
+    def test_mark_seen(self, instagram_client: InstagramClient) -> None:
+        instagram_client.client.direct_message_seen.return_value = True
+        assert instagram_client.mark_seen("111", "222") is True
+        instagram_client.client.direct_message_seen.assert_called_once_with(111, 222)
+
+    def test_download_message_media(
+        self, instagram_client: InstagramClient, tmp_path: Path
+    ) -> None:
+        thread = MagicMock(
+            messages=[_ig_message("9", "media", thumbnail_url="https://cdn/x/photo.jpg")]
+        )
+        instagram_client.client.direct_thread.return_value = thread
+        response = MagicMock(content=b"jpeg", headers={"content-type": "image/jpeg"})
+        with patch("instagram_mcp.client.httpx2.get", return_value=response) as get:
+            path = instagram_client.download_message_media("123456789", "9", tmp_path / "media")
+        get.assert_called_once_with("https://cdn/x/photo.jpg", timeout=60, follow_redirects=True)
+        assert path == tmp_path / "media" / "456789-9.jpg"
+        assert path.read_bytes() == b"jpeg"
+
+    def test_download_prefers_video_and_url_suffix(
+        self, instagram_client: InstagramClient, tmp_path: Path
+    ) -> None:
+        item = _ig_message(
+            "9", "video", video_url="https://cdn/v/clip.mp4?x=1", thumbnail_url="https://t"
+        )
+        instagram_client.client.direct_thread.return_value = MagicMock(messages=[item])
+        response = MagicMock(content=b"mp4", headers={})
+        with patch("instagram_mcp.client.httpx2.get", return_value=response):
+            path = instagram_client.download_message_media("1", "9", tmp_path)
+        assert path.suffix == ".mp4"
+
+    @pytest.mark.parametrize(
+        ("messages", "error"),
+        [
+            ([], "not in the latest 50"),
+            ([_ig_message("9", "raven_media", thumbnail_url="https://t")], "view-once"),
+            ([_ig_message("9", "text")], "no downloadable media"),
+        ],
+    )
+    def test_download_refusals(
+        self,
+        instagram_client: InstagramClient,
+        tmp_path: Path,
+        messages: list[MagicMock],
+        error: str,
+    ) -> None:
+        instagram_client.client.direct_thread.return_value = MagicMock(messages=messages)
+        with pytest.raises(InstagramClientError, match=error):
+            instagram_client.download_message_media("1", "9", tmp_path)
+
+    def test_send_voice_m4a_as_is(self, instagram_client: InstagramClient, tmp_path: Path) -> None:
+        clip = tmp_path / "v.m4a"
+        clip.write_bytes(b"aac")
+        sent = MagicMock(
+            id="5", user_id="1", text=None, item_type="voice_media", is_sent_by_viewer=True
+        )
+        sent.user = None
+        sent.media = None
+        sent.timestamp = datetime(2026, 9, 27)
+        instagram_client.client.direct_send_voice.return_value = sent
+        message = instagram_client.send_voice(clip, "111")
+        instagram_client.client.direct_send_voice.assert_called_once_with(
+            path=clip, thread_ids=[111]
+        )
+        assert message is not None
+        assert message.message_id == "5"
+
+    def test_send_voice_converts_with_ffmpeg(
+        self, instagram_client: InstagramClient, tmp_path: Path
+    ) -> None:
+        clip = tmp_path / "v.ogg"
+        clip.write_bytes(b"opus")
+        instagram_client.client.direct_send_voice.return_value = None
+        with (
+            patch("instagram_mcp.client.shutil.which", return_value="/usr/bin/ffmpeg"),
+            patch("instagram_mcp.client.subprocess.run") as run,
+        ):
+            assert instagram_client.send_voice(clip, "111") is None
+        argv = run.call_args.args[0]
+        assert argv[:2] == ["/usr/bin/ffmpeg", "-y"]
+        assert argv[-1].endswith("v.m4a")
+        sent_path = instagram_client.client.direct_send_voice.call_args.kwargs["path"]
+        assert sent_path.suffix == ".m4a"
+
+    def test_send_voice_needs_ffmpeg(
+        self, instagram_client: InstagramClient, tmp_path: Path
+    ) -> None:
+        with (
+            patch("instagram_mcp.client.shutil.which", return_value=None),
+            pytest.raises(InstagramClientError, match="ffmpeg"),
+        ):
+            instagram_client.send_voice(tmp_path / "v.wav", "111")

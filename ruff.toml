@@ -1,6 +1,6 @@
 # Ruff configuration for instagram-mcp
 
-target-version = "py313"
+target-version = "py314"
 line-length = 100
 
 [lint]
@@ -31,6 +31,10 @@ ignore = [
     "D107",     # Missing docstring in __init__
     "PLC0415",  # Import not at top-level (needed to avoid circular imports)
 ]
+
+[lint.flake8-type-checking]
+# Pydantic resolves field annotations at runtime, so their imports must stay real.
+runtime-evaluated-base-classes = ["pydantic.BaseModel", "pydantic_settings.BaseSettings"]
 
 [lint.pydocstyle]
 convention = "google"

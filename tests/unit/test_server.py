@@ -130,13 +130,13 @@ class TestMain:
     def test_main_success(self, mock_settings: MagicMock) -> None:
         with (
             patch("instagram_mcp.server.create_server") as mock_create,
-            patch("instagram_mcp.server.get_settings", return_value=mock_settings),
         ):
             mock_mcp = MagicMock()
             mock_create.return_value = mock_mcp
 
             main()
 
+            mock_create.assert_called_once()
             mock_mcp.run.assert_called_once_with(transport="stdio")
 
     def test_main_auth_error(self, mock_settings: MagicMock) -> None:
@@ -174,3 +174,50 @@ class TestMain:
             main()
 
         assert exc_info.value.code == 0
+
+
+class TestChannelWiring:
+    def test_realtime_events_feed_the_channel(
+        self, mock_settings: MagicMock, _no_live_mqtt: MagicMock
+    ) -> None:
+        settings = mock_settings.model_copy(
+            update={"instagram_subscribe": "ly=111,bad=222", "instagram_control_thread": "999"}
+        )
+        with (
+            patch("instagram_mcp.server.setup_logging"),
+            patch("instagram_mcp.server.InstagramClient") as mock_client_class,
+        ):
+            mock_client = mock_client_class.return_value
+            mock_client.client.user_id = 42
+            mock_client.get_thread.return_value = MagicMock(thread_title="Ly", users=[])
+
+            mcp = create_server(settings)
+
+        manager = _no_live_mqtt.return_value
+        manager.set_listener.assert_called_once()
+        manager.start_watchdog.assert_called_once()
+        assert "subscribe" in mcp._tool_manager._tools
+        assert mcp.instructions is not None
+        assert "Instagram DM channel" in mcp.instructions
+
+    def test_mqtt_connect_failure_still_starts_watchdog(
+        self, mock_settings: MagicMock, _no_live_mqtt: MagicMock
+    ) -> None:
+        _no_live_mqtt.return_value.connect.side_effect = OSError("no route")
+        with (
+            patch("instagram_mcp.server.setup_logging"),
+            patch("instagram_mcp.server.InstagramClient"),
+        ):
+            create_server(mock_settings)
+        _no_live_mqtt.return_value.start_watchdog.assert_called_once()
+
+    def test_no_iris_info_means_no_realtime(
+        self, mock_settings: MagicMock, _no_live_mqtt: MagicMock
+    ) -> None:
+        with (
+            patch("instagram_mcp.server.setup_logging"),
+            patch("instagram_mcp.server.InstagramClient") as mock_client_class,
+        ):
+            mock_client_class.return_value.get_iris_info.side_effect = RuntimeError("429")
+            create_server(mock_settings)
+        _no_live_mqtt.assert_not_called()
