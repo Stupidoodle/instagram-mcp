@@ -57,6 +57,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger("instagram_mcp.channel")
 
 
+def _media_meta(event: MessageEvent) -> dict[str, str]:
+    """The downloaded file, transcript and any error of an inbound media message."""
+    fields = {
+        "media_path": event.media_path,
+        "transcript": event.transcript,
+        "media_error": event.media_error,
+    }
+    return {key: value for key, value in fields.items() if value}
+
+
+def _media_label(event: MessageEvent) -> str:
+    """What a persona sees for a media message without a caption."""
+    if event.item_type == "voice_media":
+        return f"[voice note] {event.transcript}" if event.transcript else "[voice note]"
+    if event.item_type == "media" and event.media_path:
+        return "[video]" if event.media_path.endswith((".mp4", ".mov")) else "[photo]"
+    return f"[{event.item_type}: message_id={event.item_id}]"
+
+
 def _now() -> float:
     """The monotonic clock, looked up at call time so tests can pin it."""
     return time.monotonic()
@@ -75,9 +94,9 @@ INSTRUCTIONS = """Instagram DM channel. Conversations are addressed by a short A
 You never type a raw thread id except once, in subscribe.
 
 INCOMING EVENTS (subscribed chats only) arrive as <channel source="instagram" chat="<alias>" ...>:
-- Message: attributes chat, user, message_id, ts. Media adds media_type; use
-  download_attachment to view it. is_from_me="true" means the account owner sent it
-  from their phone. When a message event arrives it's your turn: reply right away.
+- Message: attributes chat, user, message_id, ts. Media adds media_type and media_path
+  (Read it); voice notes come as their transcript. is_from_me="true": the owner
+  sent it from their phone. A message event means it's your turn: reply right away.
 - View-once: view_once="true" is a disappearing photo/video. It can't be opened here;
   never pretend you saw it.
 - Edit / unsend / reaction: event_type="edit" | "unsend" | "reaction" with
@@ -96,7 +115,7 @@ TOOLS (address by alias, or omit "to" for the sole subscribed target):
 - send_audio(file_path, to?): send a voice message
 - send_typing(to?, composing?): optional "typing..." indicator
 - mark_read(message_ids, to?): optional read receipt
-- download_attachment(message_id, to?): fetch media so you can view it
+- download_attachment(message_id, to?): fetch older media
 - get_message_ids(to?, filter?, limit?): your OWN recent messages + ids (for unsend)
 - unsend(message_id, to?): take back one of YOUR messages
 - react(message_id, emoji, to?): react with an emoji ("" removes yours)
@@ -430,7 +449,8 @@ class Channel:
             return f"[{user} sent a view-once photo/video — it can't be opened here]", meta
         if event.item_type not in {"text", "unknown"}:
             meta["media_type"] = event.item_type
-            return text or f"[{event.item_type}: message_id={event.item_id}]", meta
+            meta |= _media_meta(event)
+            return text or _media_label(event), meta
         return text, meta
 
     def _user_name(self, chat: _Chat, user_id: int | str) -> str:

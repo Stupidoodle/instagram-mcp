@@ -443,3 +443,40 @@ class TestLink:
         assert content == "survey: https://example.com/s"
         assert meta["link_url"] == "https://example.com/s"
         assert meta["link_title"] == "Survey"
+
+
+class TestMedia:
+    def test_voice_note_shows_its_transcript(self) -> None:
+        channel, sent = _channel()
+        channel.subscribe(T1, "alex")
+        channel.handle(
+            _msg(
+                text=None,
+                item_type="voice_media",
+                media_path="/media/t1/i1.m4a",
+                transcript="hallo zäme",
+            )
+        )
+        content, meta = sent[-1]
+        assert content == "[voice note] hallo zäme"
+        assert meta["media_type"] == "voice_media"
+        assert meta["media_path"] == "/media/t1/i1.m4a"
+        assert meta["transcript"] == "hallo zäme"
+
+    def test_photo_and_video_point_at_the_file(self) -> None:
+        channel, sent = _channel()
+        channel.subscribe(T1, "alex")
+        channel.handle(_msg(text=None, item_type="media", media_path="/media/t1/i1.jpg"))
+        channel.handle(_msg(text=None, item_type="media", item_id="i2", media_path="/m/i2.mp4"))
+        assert [c for c, _ in sent[-2:]] == ["[photo]", "[video]"]
+        assert sent[-2][1]["media_path"] == "/media/t1/i1.jpg"
+
+    def test_a_media_error_is_passed_on(self) -> None:
+        channel, sent = _channel()
+        channel.subscribe(T1, "alex")
+        channel.handle(
+            _msg(text=None, item_type="voice_media", media_error="transcription failed: boom")
+        )
+        content, meta = sent[-1]
+        assert content == "[voice note]"
+        assert meta["media_error"] == "transcription failed: boom"

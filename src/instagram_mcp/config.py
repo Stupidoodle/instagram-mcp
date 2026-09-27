@@ -67,7 +67,11 @@ class Settings(BaseSettings):
     )
     instagram_media_dir: Path = Field(
         default=Path("media"),
-        description="Where download_attachment saves photos, videos and voice clips",
+        description="Where inbound and requested photos, videos and voice clips are saved",
+    )
+    instagram_transcriber_url: str = Field(
+        default="http://127.0.0.1:8090",
+        description="The transcriber service that turns voice notes into text",
     )
     instagram_subscribe: str = Field(
         default="",

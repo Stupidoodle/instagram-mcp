@@ -23,16 +23,24 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
+import httpx2
 import uvicorn
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
-from instagram_mcp.client import AuthenticationError, InstagramClient, SessionError
+from instagram_mcp.client import (
+    AuthenticationError,
+    InstagramClient,
+    InstagramClientError,
+    SessionError,
+)
 from instagram_mcp.config import get_settings, setup_logging
+from instagram_mcp.media import InboundMedia
 from instagram_mcp.mqtt.events import (
     MessageEvent,
     ReactionEvent,
@@ -45,6 +53,7 @@ from instagram_mcp.mqtt.manager import MQTTManager
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
     from starlette.requests import Request
 
@@ -67,6 +76,9 @@ def event_to_dict(event: Event) -> dict[str, Any] | None:  # noqa: PLR0911
             "edited": event.edited,
             "link_url": event.link_url,
             "link_title": event.link_title,
+            "media_path": event.media_path,
+            "transcript": event.transcript,
+            "media_error": event.media_error,
         }
     if isinstance(event, ReactionEvent):
         return {
@@ -118,6 +130,7 @@ class Gateway:
         self.self_user_id = ""
         self._subscribers: set[asyncio.Queue[str]] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._media: InboundMedia | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -129,6 +142,12 @@ class Gateway:
             password=self.settings.instagram_password.get_secret_value(),
         )
         self.self_user_id = str(self.client.client.user_id or "")
+        self._media = InboundMedia(
+            self_user_id=self.self_user_id,
+            download=self._download_media,
+            transcribe=self._transcribe,
+            deliver=self._deliver,
+        )
         iris = self.client.get_iris_info()
         self.mqtt = MQTTManager()
         self.mqtt.set_listener(self._on_event)
@@ -152,12 +171,33 @@ class Gateway:
     # ── event fan-out (called on the MQTT reader thread) ───────────────────
 
     def _on_event(self, event: Event) -> None:
-        payload = event_to_dict(event)
-        if payload is None or self._loop is None:
+        if self._loop is None or self._media is None:
             return
-        line = f"data: {json.dumps(payload)}\n\n"
-        # Hop from the reader thread onto the event loop to touch the queues safely.
-        self._loop.call_soon_threadsafe(self._fan_out, line)
+        # Hop from the reader thread onto the event loop; InboundMedia keeps chat order.
+        self._loop.call_soon_threadsafe(self._media.submit, event)
+
+    def _deliver(self, event: Event) -> None:
+        payload = event_to_dict(event)
+        if payload is not None:
+            self._fan_out(f"data: {json.dumps(payload)}\n\n")
+
+    def _download_media(self, event: MessageEvent) -> Path:
+        """Download an inbound message's media (on a worker thread)."""
+        folder = self.settings.instagram_media_dir.resolve() / event.thread_id
+        try:
+            return self.client.download_message_media(event.thread_id, event.item_id, folder)
+        except InstagramClientError:
+            # The push can beat the REST API by a moment; try once more.
+            time.sleep(2)
+            return self.client.download_message_media(event.thread_id, event.item_id, folder)
+
+    async def _transcribe(self, path: Path) -> str:
+        url = self.settings.instagram_transcriber_url.rstrip("/") + "/transcribe"
+        async with httpx2.AsyncClient(timeout=150) as http:
+            resp = await http.post(url, json={"path": str(path)})
+        if resp.status_code != 200:
+            raise RuntimeError(resp.json().get("error", f"HTTP {resp.status_code}"))
+        return str(resp.json()["text"])
 
     def _fan_out(self, line: str) -> None:
         for q in list(self._subscribers):

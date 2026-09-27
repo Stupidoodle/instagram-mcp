@@ -28,6 +28,9 @@ class MessageEvent(Event):
     edited: bool = False
     link_url: str | None = None  # the shared URL, for item_type "link"
     link_title: str | None = None  # its preview title
+    media_path: str | None = None  # downloaded photo/video/voice file (inbound media)
+    transcript: str | None = None  # voice notes
+    media_error: str | None = None  # why the download or transcription failed
 
 
 @dataclass(frozen=True)

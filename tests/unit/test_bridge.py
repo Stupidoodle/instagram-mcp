@@ -31,6 +31,9 @@ class TestEventToDict:
             "edited": True,
             "link_url": None,
             "link_title": None,
+            "media_path": None,
+            "transcript": None,
+            "media_error": None,
         }
 
     def test_reaction(self) -> None:
