@@ -4,8 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from instagram_mcp.bridge import _msg_json, _thread_json, event_to_dict
+import uvicorn
+
+from instagram_mcp import bridge
+from instagram_mcp.bridge import Gateway, _msg_json, _thread_json, event_stream, event_to_dict
 from instagram_mcp.mqtt.events import (
     Event,
     MessageEvent,
@@ -136,3 +140,31 @@ class TestJsonSerializers:
             "is_from_me": True,
             "seen_since": 5,
         }
+
+
+def _bare_gateway() -> Gateway:
+    g = Gateway.__new__(Gateway)  # no login: only the subscriber plumbing is exercised
+    g._subscribers = set()
+    return g
+
+
+class TestShutdown:
+    async def test_closing_ends_every_stream(self) -> None:
+        g = _bare_gateway()
+        q = g.add_subscriber()
+        g._fan_out("data: {}\n\n")
+        g.close_streams()
+        lines = [line async for line in event_stream(g, q)]
+        assert lines == [": connected\n\n", "data: {}\n\n"]
+        assert g._subscribers == set()
+
+    async def test_the_server_closes_streams_before_waiting_on_connections(self) -> None:
+        g = MagicMock()
+        server = bridge.BridgeServer(uvicorn.Config(MagicMock()))
+        with (
+            patch.object(bridge, "gateway", g),
+            patch.object(uvicorn.Server, "shutdown", AsyncMock()) as base,
+        ):
+            await server.shutdown()
+        g.close_streams.assert_called_once_with()
+        base.assert_awaited_once()

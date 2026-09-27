@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import sys
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -53,6 +54,7 @@ from instagram_mcp.mqtt.events import (
 from instagram_mcp.mqtt.manager import MQTTManager
 
 if TYPE_CHECKING:
+    import socket
     from collections.abc import AsyncIterator
     from pathlib import Path
 
@@ -130,7 +132,7 @@ class Gateway:
         )
         self.mqtt: MQTTManager | None = None
         self.self_user_id = ""
-        self._subscribers: set[asyncio.Queue[str]] = set()
+        self._subscribers: set[asyncio.Queue[str | None]] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._media: InboundMedia | None = None
         self._sweeper: asyncio.Task[None] | None = None
@@ -230,15 +232,21 @@ class Gateway:
             except asyncio.QueueFull:
                 logger.warning("Dropping event for a slow SSE subscriber")
 
-    def add_subscriber(self) -> asyncio.Queue[str]:
+    def add_subscriber(self) -> asyncio.Queue[str | None]:
         """Register a new SSE subscriber queue."""
-        q: asyncio.Queue[str] = asyncio.Queue(maxsize=1000)
+        q: asyncio.Queue[str | None] = asyncio.Queue(maxsize=1000)
         self._subscribers.add(q)
         return q
 
-    def remove_subscriber(self, q: asyncio.Queue[str]) -> None:
+    def remove_subscriber(self, q: asyncio.Queue[str | None]) -> None:
         """Drop an SSE subscriber queue."""
         self._subscribers.discard(q)
+
+    def close_streams(self) -> None:
+        """End every SSE stream (None is the end marker); clients reconnect."""
+        for q in list(self._subscribers):
+            with contextlib.suppress(asyncio.QueueFull):
+                q.put_nowait(None)
 
 
 gateway: Gateway | None = None
@@ -255,23 +263,27 @@ def gw() -> Gateway:
 # ── HTTP: domain event stream ──────────────────────────────────────────────
 
 
+async def event_stream(g: Gateway, q: asyncio.Queue[str | None]) -> AsyncIterator[str]:
+    """One subscriber's SSE lines, until the gateway closes the stream."""
+    yield ": connected\n\n"
+    try:
+        while True:
+            try:
+                line = await asyncio.wait_for(q.get(), timeout=20)
+            except TimeoutError:
+                yield ": keepalive\n\n"  # keeps proxies/clients from timing out
+                continue
+            if line is None:
+                return
+            yield line
+    finally:
+        g.remove_subscriber(q)
+
+
 async def sse_events(_request: Request) -> StreamingResponse:
     """SSE stream of every domain event; clients filter to their threads."""
     g = gw()
-    q = g.add_subscriber()
-
-    async def stream() -> AsyncIterator[str]:
-        yield ": connected\n\n"
-        try:
-            while True:
-                with contextlib.suppress(TimeoutError):
-                    yield await asyncio.wait_for(q.get(), timeout=20)
-                    continue
-                yield ": keepalive\n\n"  # keeps proxies/clients from timing out
-        finally:
-            g.remove_subscriber(q)
-
-    return StreamingResponse(stream(), media_type="text/event-stream")
+    return StreamingResponse(event_stream(g, g.add_subscriber()), media_type="text/event-stream")
 
 
 # ── HTTP: commands + reads (each delegates to the one instagrapi login) ─────
@@ -577,6 +589,20 @@ def build_app() -> Starlette:
     return Starlette(routes=routes, lifespan=lifespan)
 
 
+class BridgeServer(uvicorn.Server):
+    """Ends the SSE streams before uvicorn waits for connections to close.
+
+    Without this, the never-ending streams hold every shutdown until systemd
+    kills the process, and the MQTT connection is never closed.
+    """
+
+    async def shutdown(self, sockets: list[socket.socket] | None = None) -> None:
+        """Close the streams, then shut down as usual."""
+        if gateway is not None:
+            gateway.close_streams()
+        await super().shutdown(sockets)
+
+
 def main() -> None:
     """Entry point for `uv run instagram-bridge`."""
     settings = get_settings()
@@ -584,11 +610,21 @@ def main() -> None:
     host = settings.instagram_bridge_host
     port = settings.instagram_bridge_port
     logger.info("Starting Instagram bridge on %s:%d", host, port)
+    config = uvicorn.Config(
+        build_app(),
+        host=host,
+        port=port,
+        log_level=settings.log_level.lower(),
+        timeout_graceful_shutdown=5,  # backstop for a client that won't let go
+    )
+    server = BridgeServer(config)
     try:
-        uvicorn.run(build_app(), host=host, port=port, log_level=settings.log_level.lower())
+        server.run()
     except (AuthenticationError, SessionError) as e:
         logger.error("Instagram auth failed: %s. Run instagram-mcp-login first.", e)
         raise
+    if not server.started:
+        sys.exit(3)  # uvicorn's startup-failure code, so systemd restarts us
 
 
 if __name__ == "__main__":
