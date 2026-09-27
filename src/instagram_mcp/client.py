@@ -35,6 +35,7 @@ from instagram_mcp.models.schemas import (
     Reaction,
     ThreadUser,
 )
+from instagram_mcp.raven import ViewMode, send_disappearing
 
 if TYPE_CHECKING:
     from instagrapi.types import DirectMessage as IGDirectMessage
@@ -1156,6 +1157,22 @@ class InstagramClient:
             tid = str(result.thread_id) if hasattr(result, "thread_id") else ""
             return _convert_message(result, tid)
         return None
+
+    def send_disappearing(self, path: Path, thread_id: str, view_mode: ViewMode) -> str | None:
+        """Send a photo or video as view once or allow replay.
+
+        Args:
+            path: The photo or mp4 video.
+            thread_id: The thread to send it to.
+            view_mode: ``"once"`` or ``"replayable"``.
+
+        Returns:
+            The new message's id, when Instagram returns one.
+        """
+        result = send_disappearing(self.client, thread_id, path, view_mode)
+        payload = result.get("payload")
+        item_id = payload.get("item_id") if isinstance(payload, dict) else None
+        return str(item_id) if item_id else None
 
     def share_media(
         self,

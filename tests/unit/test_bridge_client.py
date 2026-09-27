@@ -253,3 +253,20 @@ class TestCatchUpStream:
         ((event, event_id),) = delivered
         assert isinstance(event, MessageEvent)
         assert event_id == "b1-5"
+
+
+class TestSendMedia:
+    def test_view_mode_goes_along_only_when_set(self) -> None:
+        bodies: list[dict[str, str]] = []
+
+        def handler(request: httpx2.Request) -> httpx2.Response:
+            bodies.append(json.loads(request.content))
+            return httpx2.Response(200, json={"success": True})
+
+        client = _client(handler)
+        client.send_media("t1", "/p.jpg", "photo", "once")
+        client.send_media("t1", "/p.jpg", "photo")
+        assert bodies == [
+            {"thread_id": "t1", "path": "/p.jpg", "kind": "photo", "view_mode": "once"},
+            {"thread_id": "t1", "path": "/p.jpg", "kind": "photo"},
+        ]

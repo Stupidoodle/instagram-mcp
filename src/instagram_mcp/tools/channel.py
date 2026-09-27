@@ -10,7 +10,7 @@ import contextlib
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from mcp.types import ToolAnnotations
 
@@ -129,7 +129,11 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
-    def send_file(file_path: str, to: str | None = None) -> dict[str, Any]:
+    def send_file(
+        file_path: str,
+        to: str | None = None,
+        view_mode: Literal["once", "replayable"] | None = None,
+    ) -> dict[str, Any]:
         """Send a photo or video (Instagram DMs take no other file types).
 
         The path is read on the bridge host (where Instagram is connected).
@@ -137,6 +141,8 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
         Args:
             file_path: Path to the photo or video (on the bridge host).
             to: Chat alias. Omit for the sole subscribed target.
+            view_mode: "once" (view once) or "replayable" (allow replay) sends it as a
+                disappearing photo/video (videos: H.264 mp4). Omit for a normal one.
         """
         suffix = Path(file_path).suffix.lower()
         if suffix not in _PHOTO_SUFFIXES | _VIDEO_SUFFIXES:
@@ -148,7 +154,7 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
         try:
             thread_id = target(to)
             channel.expect_echo(thread_id, "media")
-            return _sent(thread_id, bridge.send_media(thread_id, file_path, kind))
+            return _sent(thread_id, bridge.send_media(thread_id, file_path, kind, view_mode))
         except ChannelError as e:
             return _refused(e)
         except Exception as e:

@@ -11,7 +11,7 @@ events. Nothing polls. The channel tools use the same names as the WhatsApp chan
 **Channel (realtime)**
 - `subscribe` / `unsubscribe` / `list_subscriptions` - Pick which chats stream events, each under a short alias
 - `reply` - Send a text message
-- `send_file` / `send_audio` - Send a photo or video / a voice message (converted to `.m4a`)
+- `send_file` / `send_audio` - Send a photo or video (optionally view once or allow replay) / a voice message (converted to `.m4a`)
 - `send_typing` / `mark_read` - Typing indicator / "Seen"
 - `react` / `unsend` / `get_message_ids` - React, take back your own messages
 - `download_attachment` - Fetch a photo, video or voice clip (view-once media only to a temporary folder)

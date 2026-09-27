@@ -143,9 +143,14 @@ class BridgeClient:
         """Send a text message."""
         return self._post("/send", {"thread_id": thread_id, "text": text})
 
-    def send_media(self, thread_id: str, path: str, kind: str) -> dict[str, Any]:
-        """Send a photo or video (`kind` = 'photo' | 'video')."""
-        return self._post("/send_media", {"thread_id": thread_id, "path": path, "kind": kind})
+    def send_media(
+        self, thread_id: str, path: str, kind: str, view_mode: str | None = None
+    ) -> dict[str, Any]:
+        """Send a photo or video (`kind` = 'photo' | 'video'), optionally disappearing."""
+        body = {"thread_id": thread_id, "path": path, "kind": kind}
+        if view_mode:
+            body["view_mode"] = view_mode
+        return self._post("/send_media", body)
 
     def send_voice(self, thread_id: str, path: str) -> dict[str, Any]:
         """Send a voice message."""

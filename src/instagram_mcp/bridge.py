@@ -354,6 +354,14 @@ async def send_media(request: Request) -> JSONResponse:
     thread_id, path, kind = body.get("thread_id"), body.get("path"), body.get("kind", "photo")
     if not thread_id or not path:
         return _err("thread_id and path required")
+    view_mode = body.get("view_mode")
+    if view_mode:  # a disappearing photo/video
+        if view_mode not in ("once", "replayable"):
+            return _err("view_mode must be 'once' or 'replayable'")
+        item_id = await run_in_threadpool(
+            gw().client.send_disappearing, Path(path), thread_id, view_mode
+        )
+        return JSONResponse({"success": True, "message_id": item_id})
     fn = gw().client.send_video if kind == "video" else gw().client.send_photo
     msg = await run_in_threadpool(fn, path=Path(path), thread_ids=[thread_id])
     if msg is None:

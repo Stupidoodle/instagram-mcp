@@ -74,7 +74,7 @@ class TestMessagingTools:
         # The path is read on the bridge host, so the tool only validates the suffix.
         self.bridge.send_media.return_value = {"success": True, "message_id": "p"}
         assert self._tool("send_file")(file_path="/host/a.jpg")["message_id"] == "p"
-        self.bridge.send_media.assert_called_once_with(T1, "/host/a.jpg", "photo")
+        self.bridge.send_media.assert_called_once_with(T1, "/host/a.jpg", "photo", None)
 
         self.bridge.send_media.return_value = {"success": False}
         assert self._tool("send_file")(file_path="/host/b.mp4")["success"] is False
@@ -89,7 +89,13 @@ class TestMessagingTools:
     def test_send_file_kind_video(self) -> None:
         self.bridge.send_media.return_value = {"success": True, "message_id": "v"}
         self._tool("send_file")(file_path="/host/clip.mov")
-        self.bridge.send_media.assert_called_once_with(T1, "/host/clip.mov", "video")
+        self.bridge.send_media.assert_called_once_with(T1, "/host/clip.mov", "video", None)
+
+    def test_send_file_view_once(self) -> None:
+        self.bridge.send_media.return_value = {"success": True, "message_id": None}
+        result = self._tool("send_file")(file_path="/host/a.jpg", view_mode="once")
+        assert result["success"] is True
+        self.bridge.send_media.assert_called_once_with(T1, "/host/a.jpg", "photo", "once")
 
     def test_send_audio(self) -> None:
         self.bridge.send_voice.return_value = {"success": True, "message_id": "v"}
