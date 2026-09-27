@@ -215,6 +215,13 @@ class TestMQTTManagerPublish:
 class TestMQTTManagerStaleDetection:
     """Tests for half-open/stale connection detection — the core failure mode."""
 
+    @pytest.fixture(autouse=True)
+    def _long_uptime(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # These tests build timestamps like "now - 100s". On a freshly booted machine
+        # (a CI VM) that is negative, which the manager reads as "never".
+        real = time.monotonic
+        monkeypatch.setattr(time, "monotonic", lambda: real() + 1_000_000.0)
+
     def _make_alive_mgr(self) -> MQTTManager:
         """Create an MQTTManager with a running reader thread (simulated)."""
         mgr = MQTTManager()

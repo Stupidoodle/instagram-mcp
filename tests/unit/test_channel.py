@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -265,6 +266,12 @@ class TestEvents:
 
 
 class TestIdle:
+    @pytest.fixture(autouse=True)
+    def _exact_clock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # Nudges fire exactly on minute boundaries. An integer-valued clock keeps that
+        # arithmetic exact whatever the machine's uptime (a fresh CI VM starts near 0).
+        monkeypatch.setattr(time, "monotonic", lambda: 1_000_000.0)
+
     def test_nudge_cadence(self) -> None:
         channel, _ = _channel(idle_minutes=5)
         channel.subscribe(T1, "alex")

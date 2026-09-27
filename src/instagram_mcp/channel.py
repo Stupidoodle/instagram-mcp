@@ -56,6 +56,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("instagram_mcp.channel")
 
+
+def _now() -> float:
+    """The monotonic clock, looked up at call time so tests can pin it."""
+    return time.monotonic()
+
+
 CHANNEL_CAPABILITY: Final = "claude/channel"
 CHANNEL_METHOD: Final = "notifications/claude/channel"
 
@@ -114,7 +120,7 @@ class _Chat:
     alias: str
     name: str = ""
     user_names: dict[str, str] = field(default_factory=dict)
-    last_activity: float = field(default_factory=time.monotonic)
+    last_activity: float = field(default_factory=_now)
     idle_override: float | None = None
     last_nudge: float | None = None
     nudge_interval: float | None = None  # minutes; grows once the chat has gone quiet
