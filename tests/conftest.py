@@ -77,6 +77,7 @@ def mock_ig_message(mock_ig_user: MagicMock) -> MagicMock:
     msg.is_sent_by_viewer = True
     msg.item_type = "text"
     msg.media = None
+    msg.link = None
     return msg
 
 

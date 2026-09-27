@@ -26,6 +26,7 @@ from instagrapi.exceptions import (
     TwoFactorRequired,
 )
 
+from instagram_mcp.links import unwrap_link
 from instagram_mcp.models.schemas import (
     DirectMessage,
     DirectThread,
@@ -350,10 +351,23 @@ def _convert_message(
     if hasattr(msg, "media") and msg.media and hasattr(msg.media, "thumbnail_url"):
         media_url = str(msg.media.thumbnail_url)
 
+    text = msg.text if msg.text else None
+    link_url, link_title = None, None
+    link = getattr(msg, "link", None)
+    if link is not None:
+        # A link message keeps its text and preview under `link`.
+        text = text or link.text or None
+        context = link.link_context
+        if context is not None and context.link_url:
+            link_url = unwrap_link(str(context.link_url))
+            link_title = context.link_title or None
+
     content = MessageContent(
-        text=msg.text if msg.text else None,
+        text=text,
         media_url=media_url,
         media_type=media_type,
+        link_url=link_url,
+        link_title=link_title,
     )
 
     # Look up user from thread's users, fall back to message's user info

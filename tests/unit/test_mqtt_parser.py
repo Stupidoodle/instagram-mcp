@@ -426,6 +426,48 @@ class TestParseAppReaction:
         assert events[0].text == "You missed a video chat"
 
 
+class TestParseLinkItem:
+    """Link messages as captured on 2026-09-27: all content sits under `link`."""
+
+    def _link(self, text: str, url: str) -> bytes:
+        value = {
+            "item_id": "30000000000000000000000000000000005",
+            "user_id": 42,
+            "timestamp": 1,
+            "item_type": "link",
+            "link": {
+                "text": text,
+                "link_context": {
+                    "link_url": "https://l.instagram.com/?u="
+                    + url.replace(":", "%3A").replace("/", "%2F")
+                    + "&e=AUBf",
+                    "link_title": "Example Domain",
+                    "link_summary": "",
+                },
+            },
+        }
+        return _patches(
+            {"op": "add", "path": "/direct_v2/threads/T1/items/X", "value": json.dumps(value)}
+        )
+
+    def test_text_with_a_link(self) -> None:
+        events, _ = parse_payload(
+            "146", self._link("survey: https://example.com/s", "https://example.com/s")
+        )
+        assert isinstance(events[0], MessageEvent)
+        assert events[0].text == "survey: https://example.com/s"
+        assert events[0].link_url == "https://example.com/s"
+        assert events[0].link_title == "Example Domain"
+
+    def test_only_a_link(self) -> None:
+        events, _ = parse_payload(
+            "146", self._link("https://example.com/s", "https://example.com/s")
+        )
+        assert isinstance(events[0], MessageEvent)
+        assert events[0].text == "https://example.com/s"
+        assert events[0].link_url == "https://example.com/s"
+
+
 class TestParseIrisTypingEvent:
     def test_activity_indicator(self) -> None:
         """Typing indicator via topic 146 activity_indicator path."""

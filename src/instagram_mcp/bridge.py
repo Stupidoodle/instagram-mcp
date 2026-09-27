@@ -65,6 +65,8 @@ def event_to_dict(event: Event) -> dict[str, Any] | None:  # noqa: PLR0911
             "item_type": event.item_type,
             "timestamp": event.timestamp,
             "edited": event.edited,
+            "link_url": event.link_url,
+            "link_title": event.link_title,
         }
     if isinstance(event, ReactionEvent):
         return {
@@ -376,6 +378,8 @@ def _msg_json(m: Any) -> dict[str, Any]:
         "text": m.content.text,
         "media_type": m.content.media_type.value,
         "media_url": m.content.media_url,
+        "link_url": m.content.link_url,
+        "link_title": m.content.link_title,
         "timestamp": m.timestamp.isoformat(),
         "is_from_me": m.is_sent_by_viewer,
         "seen_since": m.seen_since,

@@ -49,6 +49,8 @@ def event_from_dict(d: dict[str, Any]) -> Event | None:  # noqa: PLR0911
                 item_type=d.get("item_type", "unknown"),
                 timestamp=int(d.get("timestamp") or 0),
                 edited=bool(d.get("edited", False)),
+                link_url=d.get("link_url"),
+                link_title=d.get("link_title"),
             )
         if kind == "reaction":
             return ReactionEvent(

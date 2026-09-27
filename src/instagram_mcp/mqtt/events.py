@@ -26,6 +26,8 @@ class MessageEvent(Event):
     item_type: str
     timestamp: int  # microseconds since epoch
     edited: bool = False
+    link_url: str | None = None  # the shared URL, for item_type "link"
+    link_title: str | None = None  # its preview title
 
 
 @dataclass(frozen=True)

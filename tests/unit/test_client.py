@@ -118,6 +118,21 @@ class TestConvertMessage:
         assert msg.content.text is None
         assert msg.content.media_type == MediaType.PHOTO
 
+    def test_convert_message_with_link(self, mock_ig_message: MagicMock) -> None:
+        mock_ig_message.text = None
+        mock_ig_message.item_type = "link"
+        mock_ig_message.link = MagicMock(text="survey: https://example.com/s")
+        mock_ig_message.link.link_context.link_url = (
+            "https://l.instagram.com/?u=https%3A%2F%2Fexample.com%2Fs&e=x"
+        )
+        mock_ig_message.link.link_context.link_title = "Survey"
+
+        msg = _convert_message(mock_ig_message, "123456789")
+
+        assert msg.content.text == "survey: https://example.com/s"
+        assert msg.content.link_url == "https://example.com/s"
+        assert msg.content.link_title == "Survey"
+
     def test_convert_message_with_media(self, mock_ig_message: MagicMock) -> None:
         mock_ig_message.media = MagicMock()
         mock_ig_message.media.thumbnail_url = "https://example.com/media.jpg"
@@ -801,7 +816,12 @@ class TestChannelClientMethods:
         clip = tmp_path / "v.m4a"
         clip.write_bytes(b"aac")
         sent = MagicMock(
-            id="5", user_id="1", text=None, item_type="voice_media", is_sent_by_viewer=True
+            id="5",
+            user_id="1",
+            text=None,
+            item_type="voice_media",
+            is_sent_by_viewer=True,
+            link=None,
         )
         sent.user = None
         sent.media = None

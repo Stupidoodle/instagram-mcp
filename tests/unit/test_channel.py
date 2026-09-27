@@ -425,3 +425,21 @@ class TestActionLog:
         assert meta["event_type"] == "notice"
         assert meta["user"] == "Alex"
         assert channel._chats[T1].idle_override is not None
+
+
+class TestLink:
+    def test_link_message_carries_its_url(self) -> None:
+        channel, sent = _channel()
+        channel.subscribe(T1, "alex")
+        channel.handle(
+            _msg(
+                text="survey: https://example.com/s",
+                item_type="link",
+                link_url="https://example.com/s",
+                link_title="Survey",
+            )
+        )
+        content, meta = sent[-1]
+        assert content == "survey: https://example.com/s"
+        assert meta["link_url"] == "https://example.com/s"
+        assert meta["link_title"] == "Survey"

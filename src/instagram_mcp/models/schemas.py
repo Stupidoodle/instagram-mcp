@@ -61,6 +61,8 @@ class MessageContent(BaseModel):
     text: str | None = Field(default=None, description="Text content")
     media_url: str | None = Field(default=None, description="Media URL")
     media_type: MediaType = Field(default=MediaType.TEXT, description="Type of media")
+    link_url: str | None = Field(default=None, description="Shared URL of a link message")
+    link_title: str | None = Field(default=None, description="Preview title of the link")
 
 
 class DirectMessage(BaseModel):

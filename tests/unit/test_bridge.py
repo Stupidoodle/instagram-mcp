@@ -29,6 +29,8 @@ class TestEventToDict:
             "item_type": "text",
             "timestamp": 1_700_000_000_000,
             "edited": True,
+            "link_url": None,
+            "link_title": None,
         }
 
     def test_reaction(self) -> None:
@@ -106,7 +108,11 @@ class TestJsonSerializers:
             message_id="m1",
             sender=SimpleNamespace(user_id="1", username="a"),
             content=SimpleNamespace(
-                text="hi", media_type=SimpleNamespace(value="text"), media_url=None
+                text="hi",
+                media_type=SimpleNamespace(value="text"),
+                media_url=None,
+                link_url=None,
+                link_title=None,
             ),
             timestamp=datetime(2024, 1, 15, 10, 30, 0),
             is_sent_by_viewer=True,
@@ -120,6 +126,8 @@ class TestJsonSerializers:
             "text": "hi",
             "media_type": "text",
             "media_url": None,
+            "link_url": None,
+            "link_title": None,
             "timestamp": "2024-01-15T10:30:00",
             "is_from_me": True,
             "seen_since": 5,

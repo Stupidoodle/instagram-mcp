@@ -63,6 +63,9 @@ def register_message_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
                 d["seen_since"] = m.get("seen_since")
             if m.get("media_url"):
                 d["media_url"] = m["media_url"]
+            if m.get("link_url"):
+                d["link_url"] = m["link_url"]
+                d["link_title"] = m.get("link_title")
             result_messages.append(d)
         return {
             "thread_id": thread_id,

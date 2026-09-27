@@ -26,6 +26,16 @@ if TYPE_CHECKING:
 ROUND_TRIP_EVENTS: list[Event] = [
     MessageEvent("t1", "i1", 5, "hey", "text", 1_700_000_000_000, edited=False),
     MessageEvent("t1", "i2", 9, None, "raven_media", 1_700_000_000_001, edited=True),
+    MessageEvent(
+        "t1",
+        "i3",
+        5,
+        "see https://example.com",
+        "link",
+        1_700_000_000_002,
+        link_url="https://example.com",
+        link_title="Example Domain",
+    ),
     ReactionEvent("t1", "i1", 5, "emojis", "🔥"),
     ReactionEvent("t1", "i1", 5, "likes", None),
     SeenEvent("t1", 5, "i1", 42),

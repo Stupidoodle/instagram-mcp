@@ -15,6 +15,7 @@ import struct
 import zlib
 from typing import Any
 
+from instagram_mcp.links import unwrap_link
 from instagram_mcp.mqtt.events import (
     Event,
     MessageEvent,
@@ -245,6 +246,16 @@ def _parse_message(
     action_log = value.get("action_log")
     if text is None and item_type == "action_log" and isinstance(action_log, dict):
         text = action_log.get("description")
+    link_url, link_title = None, None
+    link = value.get("link")
+    if isinstance(link, dict):
+        # A link message keeps everything under `link`: what was typed, and the
+        # preview with the shared URL behind Instagram's redirect.
+        text = text if text is not None else link.get("text")
+        context = link.get("link_context") or {}
+        if context.get("link_url"):
+            link_url = unwrap_link(str(context["link_url"]))
+        link_title = context.get("link_title") or None
 
     return MessageEvent(
         thread_id=thread_id,
@@ -254,6 +265,8 @@ def _parse_message(
         item_type=item_type,
         timestamp=int(value.get("timestamp", 0)),
         edited=edited,
+        link_url=link_url,
+        link_title=link_title,
     )
 
 

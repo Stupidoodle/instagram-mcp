@@ -421,6 +421,10 @@ class Channel:
         meta |= {"user": user, "message_id": event.item_id}
         if from_me:
             meta["is_from_me"] = "true"
+        if event.link_url:
+            meta["link_url"] = event.link_url
+        if event.link_title:
+            meta["link_title"] = event.link_title
         if event.item_type == "raven_media":
             meta["view_once"] = "true"
             return f"[{user} sent a view-once photo/video — it can't be opened here]", meta
