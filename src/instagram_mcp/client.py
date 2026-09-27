@@ -69,7 +69,7 @@ def _fix_instagrapi_extractors() -> None:
         try:
             channels = data["pinned_channels_info"]["pinned_channels_list"]
             return [Broadcast(**channel) for channel in channels]
-        except (KeyError, TypeError):
+        except KeyError, TypeError:
             return []
 
     def fixed_extract_user_v1(data: dict[str, Any]) -> Any:
@@ -566,7 +566,9 @@ class InstagramClient:
                 attempt += 1
                 if attempt > max_retries:
                     logger.error(
-                        "Max retries (%d) exceeded: %s", max_retries, e,
+                        "Max retries (%d) exceeded: %s",
+                        max_retries,
+                        e,
                     )
                     raise
                 backoff = min(2 ** (attempt - 1), max_delay)
@@ -931,9 +933,7 @@ class InstagramClient:
             bool: True if successful.
         """
         return bool(
-            self.client.direct_message_delete(
-                thread_id=int(thread_id), message_id=int(message_id)
-            )
+            self.client.direct_message_delete(thread_id=int(thread_id), message_id=int(message_id))
         )
 
     def react(self, thread_id: str, message_id: str, emoji: str, *, remove: bool = False) -> bool:

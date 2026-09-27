@@ -536,7 +536,7 @@ def _zone(tz: str | None) -> ZoneInfo | None:
         return None
     try:
         return ZoneInfo(tz)
-    except (ZoneInfoNotFoundError, ValueError):
+    except ZoneInfoNotFoundError, ValueError:
         logger.warning("Unknown time zone %r, using the host zone", tz)
         return None
 

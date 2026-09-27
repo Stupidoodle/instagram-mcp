@@ -214,7 +214,7 @@ def _parse_message(
     """Parse a message add (new) or replace (edit) event."""
     try:
         value = json.loads(value_str) if isinstance(value_str, str) else value_str
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         return None
 
     if not isinstance(value, dict):
@@ -238,7 +238,7 @@ def _parse_unsend(thread_id: str, item_id: str, value_str: str) -> UnsendEvent:
         value = json.loads(value_str) if isinstance(value_str, str) else value_str
         if isinstance(value, dict):
             user_id = int(value.get("user_id", 0))
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except json.JSONDecodeError, TypeError, ValueError:
         pass
 
     return UnsendEvent(
@@ -253,7 +253,7 @@ def _parse_seen(thread_id: str, user_id_str: str, value_str: str) -> SeenEvent |
     try:
         value = json.loads(value_str) if isinstance(value_str, str) else value_str
         user_id = int(user_id_str)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except json.JSONDecodeError, TypeError, ValueError:
         return None
 
     item_id = ""
@@ -290,7 +290,7 @@ def _parse_reaction(
             value = json.loads(value_str) if isinstance(value_str, str) else value_str
             if isinstance(value, dict):
                 emoji = value.get("emoji")
-        except (json.JSONDecodeError, TypeError):
+        except json.JSONDecodeError, TypeError:
             pass
 
     try:
@@ -311,7 +311,7 @@ def _parse_activity_indicator(thread_id: str, value_str: str) -> TypingEvent | N
     """Parse a typing indicator from topic 146 activity_indicator path."""
     try:
         value = json.loads(value_str) if isinstance(value_str, str) else value_str
-    except (json.JSONDecodeError, TypeError):
+    except json.JSONDecodeError, TypeError:
         return None
 
     if not isinstance(value, dict):
@@ -357,7 +357,7 @@ def _parse_pubsub_payload(data: Any) -> list[Event]:
         if isinstance(value, str):
             try:
                 value = json.loads(value)
-            except (json.JSONDecodeError, TypeError):
+            except json.JSONDecodeError, TypeError:
                 continue
 
         if isinstance(value, dict) and "sender_id" in value:
