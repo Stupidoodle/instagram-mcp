@@ -42,9 +42,12 @@ class Settings(BaseSettings):
         default=Path(".instagram_session"),
         description="Path to session file for persistence",
     )
-    instagram_app_version: str = Field(
-        default="415.0.0.36.76",
-        description="Instagram app version to emulate (bump when Instagram blocks old versions)",
+    instagram_app_version: str | None = Field(
+        default=None,
+        description=(
+            "Pin an Instagram app version instagrapi knows. Default: instagrapi's newest, "
+            "so upgrading instagrapi upgrades the emulated app (sessions follow on load)."
+        ),
     )
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = Field(
         default="INFO",

@@ -3,9 +3,11 @@
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
+from instagrapi import config as ig_config
 from instagrapi.exceptions import BadPassword, ChallengeRequired, TwoFactorRequired
 
 from instagram_mcp.client import (
@@ -18,6 +20,7 @@ from instagram_mcp.client import (
     _convert_user,
     _determine_media_type,
     interactive_login,
+    resolve_app_version,
 )
 from instagram_mcp.models.schemas import MediaType
 
@@ -336,85 +339,62 @@ class TestInstagramClient:
 
 
 class TestAppVersion:
-    """Tests for Instagram app version management."""
+    """The emulated app follows instagrapi's newest known version, like a real app update."""
 
-    def test_init_with_app_version(self, tmp_path: Path) -> None:
-        """Test that passing app_version applies it on init."""
-        mock_client = MagicMock()
-        mock_client.get_settings.return_value = {
-            "device_settings": {"app_version": "269.0.0.18.75"},
-            "user_agent": (
-                "Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; "
-                "OnePlus; 6T Dev; devitron; qcom; en_US; 314665256)"
-            ),
-        }
-        with patch("instagram_mcp.client.Client", return_value=mock_client):
-            client = InstagramClient(
-                session_file=tmp_path / "session",
-                app_version="415.0.0.36.76",
-            )
+    NEWEST = ig_config.DEFAULT_APP_VERSION
+    TRIPLE = ig_config.APP_SETTINGS[ig_config.DEFAULT_APP_VERSION]
+    KEYS = ("app_version", "version_code", "bloks_versioning_id")
 
-        assert client._app_version == "415.0.0.36.76"
-        # set_settings should have been called with the updated version
-        call_args = mock_client.set_settings.call_args[0][0]
-        assert call_args["device_settings"]["app_version"] == "415.0.0.36.76"
-        assert "415.0.0.36.76" in call_args["user_agent"]
-        assert "269.0.0.18.75" not in call_args["user_agent"]
+    def _saved_session(self, path: Path, **device: str) -> dict[str, Any]:
+        settings = InstagramClient(session_file=path).client.get_settings()
+        settings["device_settings"] |= device
+        settings["user_agent"] = f"Instagram {device.get('app_version', '')} Android (...)"
+        settings["authorization_data"] = {"sessionid": "x"}
+        path.write_text(json.dumps(settings))
+        return settings
 
-    def test_init_without_app_version(self, tmp_path: Path) -> None:
-        """Test that omitting app_version leaves client defaults alone."""
-        mock_client = MagicMock()
-        with patch("instagram_mcp.client.Client", return_value=mock_client):
-            client = InstagramClient(session_file=tmp_path / "session")
+    def _load(self, path: Path) -> InstagramClient:
+        client = InstagramClient(session_file=path)
+        with patch.object(client.client, "login_by_sessionid", return_value=True):
+            assert client.load_session()
+        return client
 
-        assert client._app_version is None
-        # get_settings should NOT be called for version patching
-        mock_client.get_settings.assert_not_called()
+    def test_resolve_defaults_to_instagrapis_newest(self) -> None:
+        assert resolve_app_version() == self.NEWEST
 
-    def test_load_session_applies_version(
-        self, tmp_path: Path, mock_instagrapi_client: MagicMock
-    ) -> None:
-        """Test that loading a session with old version gets patched."""
-        session_file = tmp_path / "session"
-        session_data = {"authorization_data": {"sessionid": "test_session"}}
-        session_file.write_text(json.dumps(session_data))
+    def test_resolve_rejects_versions_instagrapi_does_not_know(self) -> None:
+        with pytest.raises(ValueError, match="instagrapi knows"):
+            resolve_app_version("415.0.0.36.76")
 
-        mock_instagrapi_client.get_settings.return_value = {
-            "device_settings": {"app_version": "269.0.0.18.75"},
-            "user_agent": "Instagram 269.0.0.18.75 Android (...)",
-        }
+    def test_fresh_client_runs_the_full_newest_triple(self, tmp_path: Path) -> None:
+        client = InstagramClient(session_file=tmp_path / "s.json")
+        for key in self.KEYS:
+            assert client.client.device_settings[key] == self.TRIPLE[key]
+        assert self.NEWEST in client.client.user_agent
 
-        with patch("instagram_mcp.client.Client", return_value=mock_instagrapi_client):
-            client = InstagramClient(
-                session_file=session_file,
-                app_version="415.0.0.36.76",
-            )
-            client.load_session()
+    def test_old_session_is_upgraded_on_load_and_saved(self, tmp_path: Path) -> None:
+        session = tmp_path / "s.json"
+        before = self._saved_session(session, app_version="415.0.0.36.76", version_code="1")
+        client = self._load(session)
+        for key in self.KEYS:
+            assert client.client.device_settings[key] == self.TRIPLE[key]
+        # Same device, only the app changed.
+        assert client.client.get_settings()["uuids"] == before["uuids"]
+        saved = json.loads(session.read_text())
+        assert saved["device_settings"]["app_version"] == self.NEWEST
+        assert self.NEWEST in saved["user_agent"]
 
-        # set_settings called during load_session to patch version
-        calls = mock_instagrapi_client.set_settings.call_args_list
-        # Find the call that has the new version (may be init or load_session)
-        patched = any(
-            c[0][0].get("device_settings", {}).get("app_version") == "415.0.0.36.76" for c in calls
-        )
-        assert patched
+    def test_newer_session_is_never_downgraded(self, tmp_path: Path) -> None:
+        session = tmp_path / "s.json"
+        self._saved_session(session, app_version="999.0.0.0.0", version_code="9")
+        client = self._load(session)
+        assert client.client.device_settings["app_version"] == "999.0.0.0.0"
 
-    def test_apply_app_version_noop_when_same(self, tmp_path: Path) -> None:
-        """Test that _apply_app_version is a no-op when version matches."""
-        mock_client = MagicMock()
-        mock_client.get_settings.return_value = {
-            "device_settings": {"app_version": "415.0.0.36.76"},
-            "user_agent": "Instagram 415.0.0.36.76 Android (...)",
-        }
-        with patch("instagram_mcp.client.Client", return_value=mock_client):
-            InstagramClient(
-                session_file=tmp_path / "session",
-                app_version="415.0.0.36.76",
-            )
-
-        # get_settings called once (in _apply_app_version), but set_settings NOT called
-        # because version already matches
-        mock_client.set_settings.assert_not_called()
+    def test_a_pinned_known_version_is_applied(self, tmp_path: Path) -> None:
+        older = next(v for v in ig_config.APP_SETTINGS if v != self.NEWEST)
+        client = InstagramClient(session_file=tmp_path / "s.json", app_version=older)
+        for key in self.KEYS:
+            assert client.client.device_settings[key] == ig_config.APP_SETTINGS[older][key]
 
 
 class TestInstagramClientThreadOperations:

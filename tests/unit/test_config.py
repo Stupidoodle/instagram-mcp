@@ -36,7 +36,7 @@ class TestSettings:
 
         assert settings.instagram_session_file == Path(".instagram_session")
         assert settings.log_level == "INFO"
-        assert settings.instagram_app_version == "415.0.0.36.76"
+        assert settings.instagram_app_version is None
 
     def test_settings_custom_values(self) -> None:
         with patch.dict(

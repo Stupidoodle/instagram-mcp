@@ -16,6 +16,8 @@ import time
 import uuid
 from typing import TYPE_CHECKING
 
+from instagrapi import config as ig_config
+
 from instagram_mcp.mqtt.connection import PINGREQ, PINGRESP, PUBACK, PUBLISH, MQTToTConnection
 from instagram_mcp.mqtt.parser import parse_payload, parse_publish_packet
 from instagram_mcp.mqtt.thrift import build_connect_payload
@@ -85,7 +87,7 @@ class MQTTManager:
         self._session_file: Path | None = None
         self._seq_id: int = 0
         self._snapshot_at_ms: int = 0
-        self._app_version: str = "415.0.0.36.76"
+        self._app_version: str = ig_config.DEFAULT_APP_VERSION
 
     @property
     def is_connected(self) -> bool:
@@ -189,7 +191,7 @@ class MQTTManager:
         session_file: Path,
         seq_id: int,
         snapshot_at_ms: int = 0,
-        app_version: str = "415.0.0.36.76",
+        app_version: str = ig_config.DEFAULT_APP_VERSION,
     ) -> None:
         """Connect to Instagram MQTT and start the reader thread.
 

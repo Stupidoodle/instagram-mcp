@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
+from instagrapi import config as ig_config
 
 from instagram_mcp.mqtt.connection import PINGREQ, PINGRESP, PUBACK, PUBLISH
 from instagram_mcp.mqtt.events import MessageEvent
@@ -87,16 +88,19 @@ class TestMQTTManagerLifecycle:
         session_file = _make_session_file(tmp_path)
 
         mgr.connect(session_file, seq_id=42)
-        mock_publish.assert_called_once_with(
-            134,
-            {
-                "seq_id": 42,
-                "snapshot_at_ms": 0,
-                "snapshot_app_version": "415.0.0.36.76",
-                "subscription_type": "message",
-            },
-        )
-        mgr.disconnect()
+        try:
+            # Unless told otherwise, Iris is subscribed with instagrapi's newest app version.
+            mock_publish.assert_called_once_with(
+                134,
+                {
+                    "seq_id": 42,
+                    "snapshot_at_ms": 0,
+                    "snapshot_app_version": ig_config.DEFAULT_APP_VERSION,
+                    "subscription_type": "message",
+                },
+            )
+        finally:
+            mgr.disconnect()  # a failed assert must not leave the reader thread running
 
 
 class TestMQTTManagerReaderLoop:

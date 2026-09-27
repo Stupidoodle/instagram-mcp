@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 import httpx2
 from instagrapi import Client
+from instagrapi import config as ig_config
 from instagrapi.exceptions import (
     BadPassword,
     ChallengeRequired,
@@ -455,6 +456,35 @@ def _convert_thread(
     )
 
 
+# Instagram checks these together; only triples instagrapi knows are consistent.
+APP_PROFILE_KEYS = ("app_version", "version_code", "bloks_versioning_id")
+
+
+def resolve_app_version(pinned: str | None = None) -> str:
+    """The app version to emulate: a pinned one, or instagrapi's newest known version.
+
+    Args:
+        pinned: A version to pin. Must be one instagrapi knows, since Instagram checks
+            app_version, version_code and bloks_versioning_id together.
+
+    Raises:
+        ValueError: If the pinned version is unknown to instagrapi.
+    """
+    version = pinned or ig_config.DEFAULT_APP_VERSION
+    if version not in ig_config.APP_SETTINGS:
+        known = ", ".join(ig_config.APP_SETTINGS)
+        msg = f"Unknown Instagram app version {version!r}; instagrapi knows: {known}"
+        raise ValueError(msg)
+    return version
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(part) for part in version.split("."))
+    except ValueError:
+        return ()
+
+
 class InstagramClient:
     """Wrapper around instagrapi Client with session management.
 
@@ -475,9 +505,8 @@ class InstagramClient:
 
         Args:
             session_file: Path to store/load session data.
-            app_version: Instagram app version to emulate. When set, overrides
-                the version in both fresh clients and loaded sessions. This
-                prevents Instagram's ``unsupported_version`` challenge block.
+            app_version: Pin an app version instagrapi knows. Default: its newest.
+                Fresh clients and loaded sessions both run it (see _apply_app_version).
         """
         self.client = Client()
         # Override default challenge_code_handler which calls input() —
@@ -485,13 +514,13 @@ class InstagramClient:
         self.client.challenge_code_handler = self._challenge_code_handler
         self.session_file = session_file or Path(".instagram_session")
         self._logged_in = False
-        self._app_version = app_version
+        self._app_version = resolve_app_version(app_version)
+        self._app_version_pinned = app_version is not None
         # Patch instagrapi's requests Session with a default 30s timeout.
         # Without this, HTTP calls can block forever if Instagram stalls
         # the connection (silent rate limit after rapid-fire calls).
         self._patch_request_timeout(30)
-        if app_version:
-            self._apply_app_version(app_version)
+        self._apply_app_version()
 
     @staticmethod
     def _challenge_code_handler(username: str, choice: Any = None) -> str:
@@ -524,25 +553,29 @@ class InstagramClient:
 
         session.request = _request_with_timeout  # type: ignore[assignment]
 
-    def _apply_app_version(self, version: str) -> None:
-        """Patch the instagrapi client to emulate a specific Instagram app version.
+    def _apply_app_version(self) -> bool:
+        """Run the target app version, the way the real app updates itself.
 
-        Updates device_settings.app_version and the User-Agent string to match,
-        preventing Instagram's ``unsupported_version`` challenge block.
+        Applies instagrapi's whole known profile (app_version, version_code,
+        bloks_versioning_id) and rebuilds the User-Agent; the device identity stays.
+        An unpinned client never downgrades a session that is already newer.
+
+        Returns:
+            bool: True if the version changed.
         """
-        settings = self.client.get_settings()
-        old_version = settings.get("device_settings", {}).get("app_version", "")
-        if old_version == version:
-            return
-
-        settings.setdefault("device_settings", {})["app_version"] = version
-
-        old_ua = settings.get("user_agent", "")
-        if old_version and old_version in old_ua:
-            settings["user_agent"] = old_ua.replace(old_version, version)
-
-        self.client.set_settings(settings)
-        logger.info("App version updated: %s -> %s", old_version, version)
+        device = self.client.device_settings
+        target = ig_config.APP_SETTINGS[self._app_version]
+        if all(device.get(key) == target[key] for key in APP_PROFILE_KEYS):
+            return False
+        current = str(device.get("app_version", ""))
+        if not self._app_version_pinned and _version_tuple(current) > _version_tuple(
+            self._app_version
+        ):
+            return False
+        self.client.set_app(self._app_version)
+        self.client.set_user_agent()
+        logger.info("Instagram app version %s -> %s", current or "(none)", self._app_version)
+        return True
 
     def _retry_on_rate_limit(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
         """Execute operation with exponential backoff on rate limit errors.
@@ -606,12 +639,13 @@ class InstagramClient:
         try:
             session_data = json.loads(self.session_file.read_text())
             self.client.set_settings(session_data)
-            if self._app_version:
-                self._apply_app_version(self._app_version)
+            upgraded = self._apply_app_version()
             auth_data = session_data.get("authorization_data", {})
             session_id = auth_data.get("sessionid", "")
             self.client.login_by_sessionid(session_id)
             self._logged_in = True
+            if upgraded:
+                self.save_session()
             logger.info("Session loaded successfully")
             return True
         except (json.JSONDecodeError, KeyError) as e:
@@ -917,9 +951,7 @@ class InstagramClient:
         return {
             "seq_id": int(result.get("seq_id", 0)),
             "snapshot_at_ms": int(result.get("snapshot_at_ms", 0)),
-            "app_version": self.client.settings.get("device_settings", {}).get(
-                "app_version", "415.0.0.36.76"
-            ),
+            "app_version": self.client.device_settings.get("app_version", self._app_version),
         }
 
     def delete_message(self, thread_id: str, message_id: str) -> bool:
@@ -1199,7 +1231,7 @@ def interactive_login() -> None:
         settings.instagram_session_file.unlink()
 
     print("Instagram MCP - Interactive Login", file=sys.stderr)
-    print(f"App version: {settings.instagram_app_version}", file=sys.stderr)
+    print(f"App version: {client.client.device_settings['app_version']}", file=sys.stderr)
     print("=" * 40, file=sys.stderr)
 
     def get_2fa_code() -> str:
