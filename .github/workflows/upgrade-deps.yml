@@ -1,0 +1,51 @@
+# Keeps every dependency on its newest release without anyone doing anything.
+# instagrapi is the important one: its releases carry the newest Instagram app
+# version, which the client emulates. nexi deploys main on its own (deploy/nexi).
+name: Upgrade dependencies
+
+on:
+  schedule:
+    - cron: "17 4 * * *" # daily, 04:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upgrade-deps
+  cancel-in-progress: false
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Upgrade the lockfile
+        id: lock
+        run: |
+          uv lock --upgrade 2>&1 | tee lock.log
+          if git diff --quiet uv.lock; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Test against the locked versions
+        run: |
+          uv sync --locked
+          uv run pytest -q tests/unit tests/integration
+
+      - name: Commit and push
+        if: steps.lock.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          { echo "build(deps): upgrade locked dependencies"; echo; grep -E '^Updated ' lock.log || true; } > msg.txt
+          git commit -q uv.lock -F msg.txt
+          git push
