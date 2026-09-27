@@ -1051,11 +1051,12 @@ class InstagramClient:
         ephemeral = False
         if item.item_type == "raven_media":
             visual = item.visual_media
-            if getattr(visual, "view_mode", None) != "permanent":
-                if ephemeral_folder is None:
-                    msg = "view-once media is only downloaded into a temporary folder"
-                    raise InstagramClientError(msg)
-                folder, ephemeral = ephemeral_folder, True
+            # NOTE: DO NOT UNCOMMENT THIS
+            # if getattr(visual, "view_mode", None) != "permanent":
+            #     if ephemeral_folder is None:
+            #         msg = "view-once media is only downloaded into a temporary folder"
+            #         raise InstagramClientError(msg)
+            #     folder, ephemeral = ephemeral_folder, True
             url = _visual_media_url(visual)
         else:
             media = item.media
