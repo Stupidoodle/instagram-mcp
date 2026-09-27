@@ -161,7 +161,13 @@ class TestParseIrisSeqId:
                         "op": "add",
                         "path": "/direct_v2/threads/T1/items/I1",
                         "value": json.dumps(
-                            {"item_id": "I1", "user_id": 1, "timestamp": "0", "item_type": "text", "text": "hi"}
+                            {
+                                "item_id": "I1",
+                                "user_id": 1,
+                                "timestamp": "0",
+                                "item_type": "text",
+                                "text": "hi",
+                            }
                         ),
                     }
                 ],
@@ -772,8 +778,15 @@ class TestParseEdgeCases:
         from instagram_mcp.mqtt.parser import _parse_message
 
         result = _parse_message(
-            "T1", "I1",
-            {"item_id": "I1", "user_id": 7, "text": "raw dict", "item_type": "text", "timestamp": 100},
+            "T1",
+            "I1",
+            {
+                "item_id": "I1",
+                "user_id": 7,
+                "text": "raw dict",
+                "item_type": "text",
+                "timestamp": 100,
+            },
         )
         assert result is not None
         assert isinstance(result, MessageEvent)
@@ -855,7 +868,9 @@ class TestParseEdgeCases:
         """Activity indicator where value is already a dict."""
         from instagram_mcp.mqtt.parser import _parse_activity_indicator
 
-        result = _parse_activity_indicator("T1", {"sender_id": 11, "activity_status": 2, "ttl": 5000})
+        result = _parse_activity_indicator(
+            "T1", {"sender_id": 11, "activity_status": 2, "ttl": 5000}
+        )
         assert result is not None
         assert isinstance(result, TypingEvent)
         assert result.user_id == 11
@@ -864,12 +879,14 @@ class TestParseEdgeCases:
         """Pubsub extracts thread_id from path, falls back to value."""
         data = {
             "path": "/direct_v2/threads/T_FROM_PATH/something",
-            "value": json.dumps({
-                "sender_id": "100",
-                "activity_status": 1,
-                "ttl": 1000,
-                "thread_id": "T_FROM_VALUE",
-            }),
+            "value": json.dumps(
+                {
+                    "sender_id": "100",
+                    "activity_status": 1,
+                    "ttl": 1000,
+                    "thread_id": "T_FROM_VALUE",
+                }
+            ),
         }
         payload = zlib.compress(json.dumps(data).encode())
         events, _ = parse_payload("88", payload)
@@ -908,10 +925,8 @@ class TestParseEdgeCases:
         payload = zlib.compress(json.dumps(data).encode())
         events, _ = parse_payload("146", payload)
         # op=test doesn't match add/remove/replace → falls through to
-        # generic ThreadEvent since subpath=items with len>=6 but no match
-        # Actually, the items branch returns None for unknown ops
-        # Let me trace: items + len >= 6 + op="test" → not add, not remove, not replace → falls through
-        # Back to the outer if chain: subpath != "participants", subpath != "activity_indicator_id"
-        # → falls through to generic ThreadEvent
+        # An unknown op on an items path (not add/remove/replace) falls through the
+        # items branch, then past participants and activity_indicator_id, to a
+        # generic ThreadEvent.
         assert len(events) == 1
         assert isinstance(events[0], ThreadEvent)

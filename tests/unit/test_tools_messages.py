@@ -1,36 +1,70 @@
-"""Unit tests for message operation tools."""
+"""Unit tests for message history tools (thin client → bridge).
 
-from datetime import datetime
-from unittest.mock import MagicMock, patch
+The bridge returns messages as JSON dicts (see ``bridge._msg_json``), newest
+first. These tests feed those dicts through ``mock_bridge.messages`` and assert
+the tools reshape them correctly.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+from unittest.mock import MagicMock
 
 from mcp.server.mcpserver import MCPServer
 
-from instagram_mcp.client import InstagramClient
-from instagram_mcp.models.schemas import (
-    DirectMessage,
-    MediaType,
-    MessageContent,
-    ThreadUser,
-)
+from instagram_mcp.bridge_client import BridgeClient
 from instagram_mcp.tools.messages import register_message_tools
 
 
-class TestMessageTools:
+def _msg(
+    message_id: str,
+    *,
+    text: str | None = "hi",
+    username: str = "other_user",
+    is_from_me: bool = False,
+    media_type: str = "text",
+    media_url: str | None = None,
+    timestamp: str = "2024-01-15T10:30:00",
+    seen_since: int | None = None,
+) -> dict[str, Any]:
+    """A message in the bridge's JSON shape."""
+    return {
+        "message_id": message_id,
+        "user_id": "111" if is_from_me else "999",
+        "username": username,
+        "text": text,
+        "media_type": media_type,
+        "media_url": media_url,
+        "timestamp": timestamp,
+        "is_from_me": is_from_me,
+        "seen_since": seen_since,
+    }
+
+
+class _Base:
     def setup_method(self) -> None:
-        """Set up test fixtures."""
         self.mcp = MCPServer("test")
-        self.mock_client = MagicMock(spec=InstagramClient)
-        register_message_tools(self.mcp, self.mock_client)
+        self.bridge = MagicMock(spec=BridgeClient)
+        register_message_tools(self.mcp, self.bridge)
 
     def _get_tool_fn(self, name: str):
-        """Get tool function by name."""
         for tool in self.mcp._tool_manager._tools.values():
             if tool.name == name:
                 return tool.fn
         return None
 
-    def test_get_messages_success(self, sample_message: DirectMessage) -> None:
-        self.mock_client.get_messages.return_value = [sample_message]
+
+class TestMessageTools(_Base):
+    def test_get_messages_success(self) -> None:
+        self.bridge.messages.return_value = [
+            _msg(
+                "111111111",
+                text="Hello, this is a test message!",
+                username="test_user",
+                is_from_me=True,
+                seen_since=5,
+            ),
+        ]
 
         tool_fn = self._get_tool_fn("get_messages")
         assert tool_fn is not None
@@ -46,81 +80,48 @@ class TestMessageTools:
         assert "sender_id" not in result["messages"][0]
         # seen_since included for viewer's own messages
         assert "seen_since" in result["messages"][0]
+        self.bridge.messages.assert_called_once_with("123456789", amount=20)
+
+    def test_get_messages_includes_media_url(self) -> None:
+        self.bridge.messages.return_value = [
+            _msg("1", text=None, media_type="photo", media_url="https://cdn/x.jpg"),
+        ]
+
+        result = self._get_tool_fn("get_messages")(thread_id="123456789", amount=20)
+
+        assert result["messages"][0]["media_url"] == "https://cdn/x.jpg"
+        assert result["messages"][0]["media_type"] == "photo"
 
     def test_get_messages_empty(self) -> None:
-        self.mock_client.get_messages.return_value = []
+        self.bridge.messages.return_value = []
 
-        tool_fn = self._get_tool_fn("get_messages")
-        result = tool_fn(thread_id="123456789", amount=20)
+        result = self._get_tool_fn("get_messages")(thread_id="123456789", amount=20)
 
         assert result["count"] == 0
         assert result["messages"] == []
 
     def test_get_messages_error(self) -> None:
-        self.mock_client.get_messages.side_effect = Exception("API Error")
+        self.bridge.messages.side_effect = Exception("API Error")
 
-        tool_fn = self._get_tool_fn("get_messages")
-        result = tool_fn(thread_id="123456789", amount=20)
+        result = self._get_tool_fn("get_messages")(thread_id="123456789", amount=20)
 
         assert "error" in result
         assert "API Error" in result["error"]
 
-class TestGetChatLogTool:
-    """Tests for the get_chat_log tool."""
 
-    def setup_method(self) -> None:
-        """Set up test fixtures."""
-        self.mcp = MCPServer("test")
-        self.mock_client = MagicMock(spec=InstagramClient)
-        register_message_tools(self.mcp, self.mock_client)
-
-    def _get_tool_fn(self, name: str):
-        """Get tool function by name."""
-        for tool in self.mcp._tool_manager._tools.values():
-            if tool.name == name:
-                return tool.fn
-        return None
-
-    def _create_message(
-        self,
-        message_id: str,
-        text: str | None,
-        is_sent_by_viewer: bool = False,
-        username: str = "other_user",
-        timestamp: datetime | None = None,
-        media_type: MediaType = MediaType.TEXT,
-        seen_since: int | None = None,
-    ) -> DirectMessage:
-        """Create a mock DirectMessage for testing."""
-        return DirectMessage(
-            message_id=message_id,
-            thread_id="123456789",
-            sender=ThreadUser(user_id="999", username=username),
-            content=MessageContent(text=text, media_type=media_type),
-            timestamp=timestamp or datetime(2024, 1, 15, 10, 30, 0),
-            is_sent_by_viewer=is_sent_by_viewer,
-            seen_since=seen_since,
-        )
-
+class TestGetChatLogTool(_Base):
     def test_get_chat_log_basic(self) -> None:
-        """Test basic chat log output."""
-        messages = [
-            self._create_message(
-                "102",
-                "not much",
-                is_sent_by_viewer=False,
-                username="lena",
-                timestamp=datetime(2024, 1, 15, 10, 31, 0),
-            ),
-            self._create_message(
+        # Bridge returns newest first.
+        self.bridge.messages.return_value = [
+            _msg("102", text="not much", username="lena", timestamp="2024-01-15T10:31:00"),
+            _msg(
                 "101",
-                "hey whats up",
-                is_sent_by_viewer=True,
+                text="hey whats up",
                 username="you",
-                timestamp=datetime(2024, 1, 15, 10, 30, 0),
+                is_from_me=True,
+                timestamp="2024-01-15T10:30:00",
             ),
         ]
-        self.mock_client.get_messages.return_value = messages
 
         tool_fn = self._get_tool_fn("get_chat_log")
         assert tool_fn is not None
@@ -129,98 +130,68 @@ class TestGetChatLogTool:
         assert result["thread_id"] == "123456789"
         assert result["count"] == 2
         assert result["offset"] == 0
-        # Chronological order (oldest first)
         lines = result["log"].split("\n")
         assert "YOU: hey whats up" in lines[0]
         assert "lena: not much" in lines[1]
 
     def test_get_chat_log_skips_action_log(self) -> None:
-        """Test that action_log messages are filtered out."""
-        messages = [
-            self._create_message(
+        self.bridge.messages.return_value = [
+            _msg(
                 "102",
-                "thread updated",
-                media_type=MediaType.ACTION_LOG,
-                timestamp=datetime(2024, 1, 15, 10, 31, 0),
+                text="thread updated",
+                media_type="action_log",
+                timestamp="2024-01-15T10:31:00",
             ),
-            self._create_message(
-                "101",
-                "hey",
-                is_sent_by_viewer=True,
-                username="you",
-                timestamp=datetime(2024, 1, 15, 10, 30, 0),
+            _msg(
+                "101", text="hey", username="you", is_from_me=True, timestamp="2024-01-15T10:30:00"
             ),
         ]
-        self.mock_client.get_messages.return_value = messages
 
-        tool_fn = self._get_tool_fn("get_chat_log")
-        result = tool_fn(thread_id="123456789", amount=50)
+        result = self._get_tool_fn("get_chat_log")(thread_id="123456789", amount=50)
 
         assert result["count"] == 1
         assert "action_log" not in result["log"]
 
     def test_get_chat_log_media_types(self) -> None:
-        """Test that non-text media shows as [type] markers."""
-        messages = [
-            self._create_message(
+        self.bridge.messages.return_value = [
+            _msg(
                 "101",
-                None,
-                is_sent_by_viewer=False,
+                text=None,
                 username="lena",
-                media_type=MediaType.PHOTO,
-                timestamp=datetime(2024, 1, 15, 10, 30, 0),
+                media_type="photo",
+                timestamp="2024-01-15T10:30:00",
             ),
         ]
-        self.mock_client.get_messages.return_value = messages
 
-        tool_fn = self._get_tool_fn("get_chat_log")
-        result = tool_fn(thread_id="123456789", amount=50)
+        result = self._get_tool_fn("get_chat_log")(thread_id="123456789", amount=50)
 
         assert "[photo]" in result["log"]
 
     def test_get_chat_log_seen_since(self) -> None:
-        """Test seen_since annotation on last viewer message."""
-        messages = [
-            self._create_message(
+        self.bridge.messages.return_value = [
+            _msg(
                 "101",
-                "good night",
-                is_sent_by_viewer=True,
+                text="good night",
                 username="you",
-                timestamp=datetime(2024, 1, 15, 23, 0, 0),
+                is_from_me=True,
+                timestamp="2024-01-15T23:00:00",
                 seen_since=120,
             ),
         ]
-        self.mock_client.get_messages.return_value = messages
 
-        tool_fn = self._get_tool_fn("get_chat_log")
-        result = tool_fn(thread_id="123456789", amount=50)
+        result = self._get_tool_fn("get_chat_log")(thread_id="123456789", amount=50)
 
         assert "(seen 2h ago)" in result["log"]
 
     def test_get_chat_log_with_offset(self) -> None:
-        """Test offset pagination."""
-        messages = [
-            self._create_message(
-                "103",
-                "msg3",
-                timestamp=datetime(2024, 1, 15, 10, 32, 0),
-            ),
-            self._create_message(
-                "102",
-                "msg2",
-                timestamp=datetime(2024, 1, 15, 10, 31, 0),
-            ),
-            self._create_message(
-                "101",
-                "msg1",
-                timestamp=datetime(2024, 1, 15, 10, 30, 0),
-            ),
+        self.bridge.messages.return_value = [
+            _msg("103", text="msg3", timestamp="2024-01-15T10:32:00"),
+            _msg("102", text="msg2", timestamp="2024-01-15T10:31:00"),
+            _msg("101", text="msg1", timestamp="2024-01-15T10:30:00"),
         ]
-        self.mock_client.get_messages.return_value = messages
 
-        tool_fn = self._get_tool_fn("get_chat_log")
-        # Skip 1 most recent, get next 2
-        result = tool_fn(thread_id="123456789", amount=2, offset=1)
+        # Skip 1 most recent, get next 2.
+        result = self._get_tool_fn("get_chat_log")(thread_id="123456789", amount=2, offset=1)
 
         assert result["count"] == 2
         assert result["offset"] == 1
@@ -229,127 +200,62 @@ class TestGetChatLogTool:
         assert "msg3" not in result["log"]
 
     def test_get_chat_log_error(self) -> None:
-        """Test error handling."""
-        self.mock_client.get_messages.side_effect = Exception("API Error")
+        self.bridge.messages.side_effect = Exception("API Error")
 
-        tool_fn = self._get_tool_fn("get_chat_log")
-        result = tool_fn(thread_id="123456789", amount=50)
+        result = self._get_tool_fn("get_chat_log")(thread_id="123456789", amount=50)
 
         assert "error" in result
 
 
-class TestGetMessagesOffset:
-    """Tests for get_messages offset pagination."""
-
-    def setup_method(self) -> None:
-        """Set up test fixtures."""
-        self.mcp = MCPServer("test")
-        self.mock_client = MagicMock(spec=InstagramClient)
-        register_message_tools(self.mcp, self.mock_client)
-
-    def _get_tool_fn(self, name: str):
-        """Get tool function by name."""
-        for tool in self.mcp._tool_manager._tools.values():
-            if tool.name == name:
-                return tool.fn
-        return None
-
+class TestGetMessagesOffset(_Base):
     def test_offset_pagination(self) -> None:
-        """Test that offset skips the N most recent messages."""
-        messages = [
-            DirectMessage(
-                message_id=str(i),
-                thread_id="123456789",
-                sender=ThreadUser(user_id="999", username="user"),
-                content=MessageContent(text=f"msg{i}", media_type=MediaType.TEXT),
-                timestamp=datetime(2024, 1, 15, 10, i, 0),
-                is_sent_by_viewer=False,
-            )
-            for i in range(5)
+        self.bridge.messages.return_value = [
+            _msg(str(i), text=f"msg{i}", timestamp=f"2024-01-15T10:0{i}:00") for i in range(5)
         ]
-        self.mock_client.get_messages.return_value = messages
 
-        tool_fn = self._get_tool_fn("get_messages")
-        result = tool_fn(thread_id="123456789", amount=2, offset=2)
+        result = self._get_tool_fn("get_messages")(thread_id="123456789", amount=2, offset=2)
 
         assert result["count"] == 2
         assert result["offset"] == 2
         assert result["messages"][0]["text"] == "msg2"
         assert result["messages"][1]["text"] == "msg3"
-        # Client should be called with offset + amount
-        self.mock_client.get_messages.assert_called_once_with(thread_id="123456789", amount=4)
+        # Bridge is asked for offset + amount messages.
+        self.bridge.messages.assert_called_once_with("123456789", amount=4)
 
     def test_has_more_true(self) -> None:
-        """Test has_more is true when more messages exist."""
-        messages = [
-            DirectMessage(
-                message_id=str(i),
-                thread_id="123456789",
-                sender=ThreadUser(user_id="999", username="user"),
-                content=MessageContent(text=f"msg{i}", media_type=MediaType.TEXT),
-                timestamp=datetime(2024, 1, 15, 10, i, 0),
-                is_sent_by_viewer=False,
-            )
-            for i in range(3)
+        self.bridge.messages.return_value = [
+            _msg(str(i), text=f"msg{i}", timestamp=f"2024-01-15T10:0{i}:00") for i in range(3)
         ]
-        self.mock_client.get_messages.return_value = messages
 
-        tool_fn = self._get_tool_fn("get_messages")
-        result = tool_fn(thread_id="123456789", amount=3)
+        result = self._get_tool_fn("get_messages")(thread_id="123456789", amount=3)
 
         assert result["has_more"] is True
 
     def test_has_more_false(self) -> None:
-        """Test has_more is false when fewer messages than requested."""
-        messages = [
-            DirectMessage(
-                message_id="1",
-                thread_id="123456789",
-                sender=ThreadUser(user_id="999", username="user"),
-                content=MessageContent(text="only one", media_type=MediaType.TEXT),
-                timestamp=datetime(2024, 1, 15, 10, 0, 0),
-                is_sent_by_viewer=False,
-            )
-        ]
-        self.mock_client.get_messages.return_value = messages
+        self.bridge.messages.return_value = [_msg("1", text="only one")]
 
-        tool_fn = self._get_tool_fn("get_messages")
-        result = tool_fn(thread_id="123456789", amount=20)
+        result = self._get_tool_fn("get_messages")(thread_id="123456789", amount=20)
 
         assert result["has_more"] is False
 
     def test_seen_since_only_on_viewer_messages(self) -> None:
-        """Test seen_since is included only for viewer's own messages."""
-        viewer_msg = DirectMessage(
-            message_id="1",
-            thread_id="123456789",
-            sender=ThreadUser(user_id="111", username="you"),
-            content=MessageContent(text="hi", media_type=MediaType.TEXT),
-            timestamp=datetime(2024, 1, 15, 10, 0, 0),
-            is_sent_by_viewer=True,
-            seen_since=5,
-        )
-        their_msg = DirectMessage(
-            message_id="2",
-            thread_id="123456789",
-            sender=ThreadUser(user_id="222", username="them"),
-            content=MessageContent(text="hey", media_type=MediaType.TEXT),
-            timestamp=datetime(2024, 1, 15, 10, 1, 0),
-            is_sent_by_viewer=False,
-            seen_since=None,
-        )
-        self.mock_client.get_messages.return_value = [their_msg, viewer_msg]
+        self.bridge.messages.return_value = [
+            _msg(
+                "2", text="hey", username="them", is_from_me=False, timestamp="2024-01-15T10:01:00"
+            ),
+            _msg(
+                "1",
+                text="hi",
+                username="you",
+                is_from_me=True,
+                timestamp="2024-01-15T10:00:00",
+                seen_since=5,
+            ),
+        ]
 
-        tool_fn = self._get_tool_fn("get_messages")
-        result = tool_fn(thread_id="123456789", amount=20)
+        result = self._get_tool_fn("get_messages")(thread_id="123456789", amount=20)
 
-        # Viewer message should have seen_since
-        viewer_result = result["messages"][1]
-        assert "seen_since" in viewer_result
-        assert viewer_result["seen_since"] == 5
-
-        # Their message should NOT have seen_since
-        their_result = result["messages"][0]
-        assert "seen_since" not in their_result
-
-
+        # Their message (index 0) has no seen_since; viewer's (index 1) does.
+        assert "seen_since" not in result["messages"][0]
+        assert "seen_since" in result["messages"][1]
+        assert result["messages"][1]["seen_since"] == 5

@@ -13,11 +13,7 @@ import uuid
 import pytest
 
 from instagram_mcp.mqtt.events import (
-    Event,
     MessageEvent,
-    SeenEvent,
-    ThreadEvent,
-    UnsendEvent,
 )
 from tests.e2e.conftest import tap_events
 
@@ -197,4 +193,3 @@ class TestThreadEvents:
             f"Expected >=3 messages, got {len(msg_events)}: "
             f"{[(e.user_id, e.text) for e in msg_events]}"
         )
-

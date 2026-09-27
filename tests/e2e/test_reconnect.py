@@ -6,6 +6,7 @@ Test 2: Kill the connection → auto-reconnect → prove MQTT works again.
 
 from __future__ import annotations
 
+import queue
 import time
 import uuid
 
@@ -35,7 +36,7 @@ class TestConnectionKillDetection:
         )
         time.sleep(2)
 
-        # Sanity: connection is alive
+        # the connection should still be alive here
         assert mgr.is_connected is True
 
         # Kill it — close the raw socket underneath
@@ -102,8 +103,8 @@ class TestAutoReconnect:
                 if isinstance(evt, MessageEvent) and marker in (evt.text or ""):
                     event = evt
                     break
-            except Exception:
-                pass
+            except queue.Empty:
+                continue
 
         mgr.set_listener(None)
         mgr.disconnect()

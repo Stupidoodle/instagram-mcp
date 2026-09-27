@@ -13,12 +13,15 @@ import os
 import queue
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from instagram_mcp.client import InstagramClient
-from instagram_mcp.mqtt.events import Event
 from instagram_mcp.mqtt.manager import MQTTManager
+
+if TYPE_CHECKING:
+    from instagram_mcp.mqtt.events import Event
 
 # Session file paths (resolved to project root)
 BOT1_SESSION = Path(".instagram_session").resolve()
@@ -30,8 +33,8 @@ def _load_dotenv() -> None:
     env_file = Path(".env").resolve()
     if not env_file.exists():
         return
-    for line in env_file.read_text().splitlines():
-        line = line.strip()
+    for raw in env_file.read_text().splitlines():
+        line = raw.strip()
         if not line or line.startswith("#"):
             continue
         key, _, value = line.partition("=")

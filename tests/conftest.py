@@ -1,6 +1,12 @@
-"""Shared pytest fixtures for Instagram MCP Server tests."""
+"""Shared pytest fixtures for Instagram MCP Server tests.
 
-from collections.abc import Iterator
+The MCP process is a thin client of the instagram-bridge daemon: it opens no
+Instagram connection of its own. Tool unit tests therefore drive a mocked
+``BridgeClient`` (see ``mock_bridge``); only ``test_client.py`` still exercises
+the real ``InstagramClient`` (which now lives inside the bridge), so the
+instagrapi-shaped fixtures below are kept for it.
+"""
+
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -9,22 +15,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from mcp.server.mcpserver import MCPServer
 
+from instagram_mcp.bridge_client import BridgeClient
 from instagram_mcp.client import InstagramClient
 from instagram_mcp.config import Settings
-from instagram_mcp.models.schemas import (
-    DirectMessage,
-    DirectThread,
-    MediaType,
-    MessageContent,
-    ThreadUser,
-)
-
-
-@pytest.fixture(autouse=True)
-def _no_live_mqtt() -> Iterator[MagicMock]:
-    """create_server() must never open a real MQTT connection in tests."""
-    with patch("instagram_mcp.server.MQTTManager") as manager_class:
-        yield manager_class
 
 
 @pytest.fixture
@@ -46,82 +39,18 @@ def mock_settings() -> Settings:
 
 
 @pytest.fixture
-def sample_user() -> ThreadUser:
-    """Create a sample user for testing."""
-    return ThreadUser(
-        user_id="123456",
-        username="test_user",
-        full_name="Test User",
-        profile_pic_url="https://example.com/pic.jpg",
-        is_verified=False,
-    )
+def mock_bridge() -> MagicMock:
+    """A mocked BridgeClient the thin-client tools talk to instead of Instagram."""
+    return MagicMock(spec=BridgeClient)
 
 
 @pytest.fixture
-def sample_user_2() -> ThreadUser:
-    """Create another sample user for testing."""
-    return ThreadUser(
-        user_id="789012",
-        username="other_user",
-        full_name="Other User",
-        profile_pic_url="https://example.com/pic2.jpg",
-        is_verified=True,
-    )
+def mock_mcp() -> MCPServer:
+    """Create an MCP server for testing tools."""
+    return MCPServer("test-server")
 
 
-@pytest.fixture
-def sample_message(sample_user: ThreadUser) -> DirectMessage:
-    """Create a sample message for testing."""
-    return DirectMessage(
-        message_id="111111111",
-        thread_id="123456789",
-        sender=sample_user,
-        content=MessageContent(
-            text="Hello, this is a test message!",
-            media_url=None,
-            media_type=MediaType.TEXT,
-        ),
-        timestamp=datetime(2024, 1, 15, 10, 30, 0),
-        is_sent_by_viewer=True,
-    )
-
-
-@pytest.fixture
-def sample_message_2(sample_user_2: ThreadUser) -> DirectMessage:
-    """Create another sample message for testing."""
-    return DirectMessage(
-        message_id="222222222",
-        thread_id="123456789",
-        sender=sample_user_2,
-        content=MessageContent(
-            text="Hi there! This is a reply.",
-            media_url=None,
-            media_type=MediaType.TEXT,
-        ),
-        timestamp=datetime(2024, 1, 15, 10, 35, 0),
-        is_sent_by_viewer=False,
-    )
-
-
-@pytest.fixture
-def sample_thread(
-    sample_user: ThreadUser,
-    sample_user_2: ThreadUser,
-    sample_message: DirectMessage,
-    sample_message_2: DirectMessage,
-) -> DirectThread:
-    """Create a sample thread for testing."""
-    return DirectThread(
-        thread_id="123456789",
-        thread_title="Test Conversation",
-        users=[sample_user, sample_user_2],
-        last_activity_at=datetime(2024, 1, 15, 10, 35, 0),
-        is_group=False,
-        is_muted=False,
-        unread=True,
-        message_count=2,
-        messages=[sample_message, sample_message_2],
-    )
+# ── instagrapi-shaped fixtures (used by test_client.py) ──────────────────────
 
 
 @pytest.fixture
@@ -185,12 +114,6 @@ def instagram_client(mock_instagrapi_client: MagicMock, tmp_path: Path) -> Insta
         client.client = mock_instagrapi_client
         client._logged_in = True
         return client
-
-
-@pytest.fixture
-def mock_mcp() -> MCPServer:
-    """Create an MCP server for testing tools."""
-    return MCPServer("test-server")
 
 
 def create_mock_tool_context() -> dict[str, Any]:

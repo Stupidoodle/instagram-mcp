@@ -9,9 +9,9 @@ import pytest
 from instagrapi.exceptions import BadPassword, ChallengeRequired, TwoFactorRequired
 
 from instagram_mcp.client import (
-    InstagramClientError,
     AuthenticationError,
     InstagramClient,
+    InstagramClientError,
     SessionError,
     _convert_message,
     _convert_thread,
@@ -343,7 +343,10 @@ class TestAppVersion:
         mock_client = MagicMock()
         mock_client.get_settings.return_value = {
             "device_settings": {"app_version": "269.0.0.18.75"},
-            "user_agent": "Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; OnePlus; 6T Dev; devitron; qcom; en_US; 314665256)",
+            "user_agent": (
+                "Instagram 269.0.0.18.75 Android (26/8.0.0; 480dpi; 1080x1920; "
+                "OnePlus; 6T Dev; devitron; qcom; en_US; 314665256)"
+            ),
         }
         with patch("instagram_mcp.client.Client", return_value=mock_client):
             client = InstagramClient(
@@ -404,7 +407,7 @@ class TestAppVersion:
             "user_agent": "Instagram 415.0.0.36.76 Android (...)",
         }
         with patch("instagram_mcp.client.Client", return_value=mock_client):
-            client = InstagramClient(
+            InstagramClient(
                 session_file=tmp_path / "session",
                 app_version="415.0.0.36.76",
             )
@@ -687,9 +690,11 @@ class TestRetryOnRateLimit:
             Exception("467 Client Error") for _ in range(10)
         ]
 
-        with patch("instagram_mcp.client.time.sleep"):
-            with pytest.raises(Exception, match="467 Client Error"):
-                instagram_client.get_messages("123456789", amount=5)
+        with (
+            patch("instagram_mcp.client.time.sleep"),
+            pytest.raises(Exception, match="467 Client Error"),
+        ):
+            instagram_client.get_messages("123456789", amount=5)
 
         # 1 initial + 5 retries = 6 total calls
         assert instagram_client.client.direct_thread.call_count == 6

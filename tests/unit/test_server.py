@@ -1,223 +1,124 @@
-"""Unit tests for MCP server."""
+"""Unit tests for the thin-client MCP server.
 
+``create_server`` opens no Instagram connection: it constructs a ``BridgeClient``,
+asks the bridge for the logged-in user id, starts a daemon thread that consumes
+the bridge's SSE stream, and registers the tools. These tests patch those
+collaborators so the server builds fully offline.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from instagram_mcp.client import AuthenticationError, SessionError
-from instagram_mcp.server import (
-    create_server,
-    get_client,
-    get_mcp,
-    main,
-)
+from instagram_mcp import server
+from instagram_mcp.server import create_server, get_bridge, get_mcp, main
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+
+@pytest.fixture
+def patched_server() -> Iterator[SimpleNamespace]:
+    """Patch create_server's collaborators so it builds without any network."""
+    bridge = MagicMock()
+    bridge.self_user_id.return_value = "42"
+    bridge.thread.return_value = {"thread_title": "", "users": []}
+    with (
+        patch("instagram_mcp.server.setup_logging"),
+        patch("instagram_mcp.server.BridgeClient", return_value=bridge) as bridge_cls,
+        patch("instagram_mcp.server.stream_events") as stream,
+        patch("instagram_mcp.server.threading.Thread") as thread_cls,
+    ):
+        yield SimpleNamespace(
+            bridge=bridge, bridge_cls=bridge_cls, stream=stream, thread_cls=thread_cls
+        )
 
 
 class TestCreateServer:
-    def test_create_server_success(self, mock_settings: MagicMock) -> None:
-        with (
-            patch("instagram_mcp.server.get_settings", return_value=mock_settings),
-            patch("instagram_mcp.server.setup_logging"),
-            patch("instagram_mcp.server.InstagramClient") as mock_client_class,
-        ):
-            mock_client = MagicMock()
-            mock_client_class.return_value = mock_client
+    def test_builds_thin_client(self, patched_server: SimpleNamespace, mock_settings) -> None:
+        mcp = create_server(mock_settings)
 
-            mcp = create_server(mock_settings)
+        assert mcp is not None
+        assert mcp.name == "instagram-mcp"
+        patched_server.bridge_cls.assert_called_once_with(mock_settings.instagram_bridge_url)
+        patched_server.bridge.self_user_id.assert_called_once()
 
-            assert mcp is not None
-            assert mcp.name == "instagram-mcp"
-            mock_client.login_or_load_session.assert_called_once()
+    def test_starts_event_stream_thread(
+        self, patched_server: SimpleNamespace, mock_settings
+    ) -> None:
+        create_server(mock_settings)
 
-    def test_create_server_auth_error(self, mock_settings: MagicMock) -> None:
-        with (
-            patch("instagram_mcp.server.get_settings", return_value=mock_settings),
-            patch("instagram_mcp.server.setup_logging"),
-            patch("instagram_mcp.server.InstagramClient") as mock_client_class,
-            pytest.raises(AuthenticationError),
-        ):
-            mock_client = MagicMock()
-            mock_client.login_or_load_session.side_effect = AuthenticationError("Failed")
-            mock_client_class.return_value = mock_client
+        patched_server.thread_cls.assert_called_once()
+        _, kwargs = patched_server.thread_cls.call_args
+        assert kwargs["target"] is patched_server.stream
+        assert kwargs["name"] == "bridge-events"
+        assert kwargs["daemon"] is True
+        # The bridge URL is the first stream_events arg.
+        assert kwargs["args"][0] == mock_settings.instagram_bridge_url
+        patched_server.thread_cls.return_value.start.assert_called_once()
 
-            create_server(mock_settings)
+    def test_registers_channel_and_tools(
+        self, patched_server: SimpleNamespace, mock_settings
+    ) -> None:
+        mcp = create_server(mock_settings)
 
-    def test_create_server_session_error(self, mock_settings: MagicMock) -> None:
-        with (
-            patch("instagram_mcp.server.get_settings", return_value=mock_settings),
-            patch("instagram_mcp.server.setup_logging"),
-            patch("instagram_mcp.server.InstagramClient") as mock_client_class,
-            pytest.raises(SessionError),
-        ):
-            mock_client = MagicMock()
-            mock_client.login_or_load_session.side_effect = SessionError("Failed")
-            mock_client_class.return_value = mock_client
+        tools = {tool.name for tool in mcp._tool_manager._tools.values()}
+        assert {"subscribe", "reply", "list_threads", "share_media"} <= tools
+        assert mcp.instructions is not None
+        assert "Instagram DM channel" in mcp.instructions
 
-            create_server(mock_settings)
-
-    def test_create_server_loads_settings(self) -> None:
-        with (
-            patch("instagram_mcp.server.get_settings") as mock_get_settings,
-            patch("instagram_mcp.server.setup_logging"),
-            patch("instagram_mcp.server.InstagramClient") as mock_client_class,
-            patch.dict(
-                "os.environ",
-                {
-                    "INSTAGRAM_USERNAME": "test",
-                    "INSTAGRAM_PASSWORD": "test",
-                },
-            ),
-        ):
-            mock_client = MagicMock()
-            mock_client_class.return_value = mock_client
-
+    def test_loads_settings_when_none(self, patched_server: SimpleNamespace, mock_settings) -> None:
+        with patch("instagram_mcp.server.get_settings", return_value=mock_settings) as get_settings:
             create_server()
+            get_settings.assert_called_once()
 
-            mock_get_settings.assert_called_once()
+    def test_subscribes_from_settings(self, patched_server: SimpleNamespace, mock_settings) -> None:
+        settings = mock_settings.model_copy(
+            update={"instagram_subscribe": "ly=111,bad=222", "instagram_control_thread": "999"}
+        )
+        create_server(settings)
+
+        aliases = {sub.split(" ")[0] for sub in server._channel.subscriptions()}
+        assert aliases == {"ly", "bad", "control"}
 
 
 class TestGetMcp:
     def test_get_mcp_not_initialized(self) -> None:
-        # Reset global state
-        import instagram_mcp.server
-
-        instagram_mcp.server._mcp = None
-
+        server._mcp = None
         with pytest.raises(RuntimeError, match="not initialized"):
             get_mcp()
 
-    def test_get_mcp_initialized(self, mock_settings: MagicMock) -> None:
-        with (
-            patch("instagram_mcp.server.get_settings", return_value=mock_settings),
-            patch("instagram_mcp.server.setup_logging"),
-            patch("instagram_mcp.server.InstagramClient") as mock_client_class,
-        ):
-            mock_client = MagicMock()
-            mock_client_class.return_value = mock_client
-
-            mcp = create_server(mock_settings)
-            result = get_mcp()
-
-            assert result is mcp
+    def test_get_mcp_initialized(self, patched_server: SimpleNamespace, mock_settings) -> None:
+        mcp = create_server(mock_settings)
+        assert get_mcp() is mcp
 
 
-class TestGetClient:
-    def test_get_client_not_initialized(self) -> None:
-        # Reset global state
-        import instagram_mcp.server
-
-        instagram_mcp.server._client = None
-
+class TestGetBridge:
+    def test_get_bridge_not_initialized(self) -> None:
+        server._bridge = None
         with pytest.raises(RuntimeError, match="not initialized"):
-            get_client()
+            get_bridge()
 
-    def test_get_client_initialized(self, mock_settings: MagicMock) -> None:
-        with (
-            patch("instagram_mcp.server.get_settings", return_value=mock_settings),
-            patch("instagram_mcp.server.setup_logging"),
-            patch("instagram_mcp.server.InstagramClient") as mock_client_class,
-        ):
-            mock_client = MagicMock()
-            mock_client_class.return_value = mock_client
-
-            create_server(mock_settings)
-            result = get_client()
-
-            assert result is mock_client
+    def test_get_bridge_initialized(self, patched_server: SimpleNamespace, mock_settings) -> None:
+        create_server(mock_settings)
+        assert get_bridge() is patched_server.bridge
 
 
 class TestMain:
-    def test_main_success(self, mock_settings: MagicMock) -> None:
-        with (
-            patch("instagram_mcp.server.create_server") as mock_create,
-        ):
-            mock_mcp = MagicMock()
-            mock_create.return_value = mock_mcp
-
+    def test_main_runs_stdio(self) -> None:
+        mock_mcp = MagicMock()
+        with patch("instagram_mcp.server.create_server", return_value=mock_mcp):
             main()
+        mock_mcp.run.assert_called_once_with(transport="stdio")
 
-            mock_create.assert_called_once()
-            mock_mcp.run.assert_called_once_with(transport="stdio")
-
-    def test_main_auth_error(self, mock_settings: MagicMock) -> None:
-        with (
-            patch(
-                "instagram_mcp.server.create_server",
-                side_effect=AuthenticationError("Failed"),
-            ),
-            pytest.raises(SystemExit) as exc_info,
-        ):
-            main()
-
-        assert exc_info.value.code == 1
-
-    def test_main_session_error(self, mock_settings: MagicMock) -> None:
-        with (
-            patch(
-                "instagram_mcp.server.create_server",
-                side_effect=SessionError("Failed"),
-            ),
-            pytest.raises(SystemExit) as exc_info,
-        ):
-            main()
-
-        assert exc_info.value.code == 1
-
-    def test_main_keyboard_interrupt(self, mock_settings: MagicMock) -> None:
-        with (
-            patch(
-                "instagram_mcp.server.create_server",
-                side_effect=KeyboardInterrupt(),
-            ),
-            pytest.raises(SystemExit) as exc_info,
-        ):
-            main()
-
-        assert exc_info.value.code == 0
-
-
-class TestChannelWiring:
-    def test_realtime_events_feed_the_channel(
-        self, mock_settings: MagicMock, _no_live_mqtt: MagicMock
-    ) -> None:
-        settings = mock_settings.model_copy(
-            update={"instagram_subscribe": "ly=111,bad=222", "instagram_control_thread": "999"}
-        )
-        with (
-            patch("instagram_mcp.server.setup_logging"),
-            patch("instagram_mcp.server.InstagramClient") as mock_client_class,
-        ):
-            mock_client = mock_client_class.return_value
-            mock_client.client.user_id = 42
-            mock_client.get_thread.return_value = MagicMock(thread_title="Ly", users=[])
-
-            mcp = create_server(settings)
-
-        manager = _no_live_mqtt.return_value
-        manager.set_listener.assert_called_once()
-        manager.start_watchdog.assert_called_once()
-        assert "subscribe" in mcp._tool_manager._tools
-        assert mcp.instructions is not None
-        assert "Instagram DM channel" in mcp.instructions
-
-    def test_mqtt_connect_failure_still_starts_watchdog(
-        self, mock_settings: MagicMock, _no_live_mqtt: MagicMock
-    ) -> None:
-        _no_live_mqtt.return_value.connect.side_effect = OSError("no route")
-        with (
-            patch("instagram_mcp.server.setup_logging"),
-            patch("instagram_mcp.server.InstagramClient"),
-        ):
-            create_server(mock_settings)
-        _no_live_mqtt.return_value.start_watchdog.assert_called_once()
-
-    def test_no_iris_info_means_no_realtime(
-        self, mock_settings: MagicMock, _no_live_mqtt: MagicMock
-    ) -> None:
-        with (
-            patch("instagram_mcp.server.setup_logging"),
-            patch("instagram_mcp.server.InstagramClient") as mock_client_class,
-        ):
-            mock_client_class.return_value.get_iris_info.side_effect = RuntimeError("429")
-            create_server(mock_settings)
-        _no_live_mqtt.assert_not_called()
+    def test_main_keyboard_interrupt_stops_events(self) -> None:
+        server._stop_events.clear()
+        mock_mcp = MagicMock()
+        mock_mcp.run.side_effect = KeyboardInterrupt()
+        with patch("instagram_mcp.server.create_server", return_value=mock_mcp):
+            main()  # must not raise
+        assert server._stop_events.is_set()

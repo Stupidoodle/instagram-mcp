@@ -28,6 +28,7 @@ class TestMQTTConnection:
         assert mqtt_manager._reader_thread is not None
         assert mqtt_manager._reader_thread.is_alive()
 
+
 class TestMessageDelivery:
     """Verify real messages flow through MQTT → listener → queue."""
 

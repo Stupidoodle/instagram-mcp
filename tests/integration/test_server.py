@@ -1,10 +1,12 @@
 """Integration tests for MCP server functionality."""
 
+from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
+import pytest
 from mcp.server.mcpserver import MCPServer
 
-from instagram_mcp.config import Settings
 from instagram_mcp.server import create_server
 from instagram_mcp.tools import (
     register_media_tools,
@@ -12,21 +14,35 @@ from instagram_mcp.tools import (
     register_thread_tools,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from instagram_mcp.config import Settings
+
+
+@pytest.fixture
+def patched_server() -> Iterator[SimpleNamespace]:
+    """Build create_server offline: no bridge HTTP, no SSE thread."""
+    bridge = MagicMock()
+    bridge.self_user_id.return_value = "42"
+    bridge.thread.return_value = {"thread_title": "", "users": []}
+    with (
+        patch("instagram_mcp.server.setup_logging"),
+        patch("instagram_mcp.server.BridgeClient", return_value=bridge),
+        patch("instagram_mcp.server.stream_events"),
+        patch("instagram_mcp.server.threading.Thread"),
+    ):
+        yield SimpleNamespace(bridge=bridge)
+
 
 class TestServerIntegration:
-    def test_server_registers_all_tools(self, mock_settings: Settings) -> None:
+    def test_server_registers_all_tools(
+        self, patched_server: SimpleNamespace, mock_settings: Settings
+    ) -> None:
         """Test that all tools are properly registered with the server."""
-        with (
-            patch("instagram_mcp.server.get_settings", return_value=mock_settings),
-            patch("instagram_mcp.server.setup_logging"),
-            patch("instagram_mcp.server.InstagramClient") as mock_client_class,
-        ):
-            mock_client = MagicMock()
-            mock_client_class.return_value = mock_client
+        mcp = create_server(mock_settings)
 
-            mcp = create_server(mock_settings)
-
-            tool_names = {tool.name for tool in mcp._tool_manager._tools.values()}
+        tool_names = {tool.name for tool in mcp._tool_manager._tools.values()}
 
         assert tool_names == {
             # Reading
@@ -60,28 +76,20 @@ class TestServerIntegration:
             "react",
         }
 
-    def test_server_metadata(self, mock_settings: Settings) -> None:
+    def test_server_metadata(
+        self, patched_server: SimpleNamespace, mock_settings: Settings
+    ) -> None:
         """Test that server metadata is correctly set."""
-        with (
-            patch("instagram_mcp.server.get_settings", return_value=mock_settings),
-            patch("instagram_mcp.server.setup_logging"),
-            patch("instagram_mcp.server.InstagramClient") as mock_client_class,
-        ):
-            mock_client = MagicMock()
-            mock_client_class.return_value = mock_client
+        mcp = create_server(mock_settings)
 
-            mcp = create_server(mock_settings)
-
-            assert mcp.name == "instagram-mcp"
+        assert mcp.name == "instagram-mcp"
 
 
 class TestToolRegistration:
     def test_register_thread_tools(self) -> None:
         """Test thread tools registration."""
         mcp = MCPServer("test")
-        mock_client = MagicMock()
-
-        register_thread_tools(mcp, mock_client)
+        register_thread_tools(mcp, MagicMock())
 
         tool_names = [tool.name for tool in mcp._tool_manager._tools.values()]
         assert "list_threads" in tool_names
@@ -96,9 +104,7 @@ class TestToolRegistration:
     def test_register_message_tools(self) -> None:
         """Test message tools registration."""
         mcp = MCPServer("test")
-        mock_client = MagicMock()
-
-        register_message_tools(mcp, mock_client)
+        register_message_tools(mcp, MagicMock())
 
         tool_names = [tool.name for tool in mcp._tool_manager._tools.values()]
         assert tool_names == ["get_messages", "get_chat_log"]
@@ -106,27 +112,19 @@ class TestToolRegistration:
     def test_register_media_tools(self) -> None:
         """Test media tools registration."""
         mcp = MCPServer("test")
-        mock_client = MagicMock()
-
-        register_media_tools(mcp, mock_client)
+        register_media_tools(mcp, MagicMock())
 
         tool_names = [tool.name for tool in mcp._tool_manager._tools.values()]
         assert tool_names == ["share_media", "share_profile"]
 
 
 class TestToolDocstrings:
-    def test_all_tools_have_docstrings(self, mock_settings: Settings) -> None:
+    def test_all_tools_have_docstrings(
+        self, patched_server: SimpleNamespace, mock_settings: Settings
+    ) -> None:
         """Test that all tools have proper docstrings (used as MCP descriptions)."""
-        with (
-            patch("instagram_mcp.server.get_settings", return_value=mock_settings),
-            patch("instagram_mcp.server.setup_logging"),
-            patch("instagram_mcp.server.InstagramClient") as mock_client_class,
-        ):
-            mock_client = MagicMock()
-            mock_client_class.return_value = mock_client
+        mcp = create_server(mock_settings)
 
-            mcp = create_server(mock_settings)
-
-            for tool in mcp._tool_manager._tools.values():
-                assert tool.description is not None, f"Tool {tool.name} has no description"
-                assert len(tool.description) > 10, f"Tool {tool.name} has too short description"
+        for tool in mcp._tool_manager._tools.values():
+            assert tool.description is not None, f"Tool {tool.name} has no description"
+            assert len(tool.description) > 10, f"Tool {tool.name} has too short description"

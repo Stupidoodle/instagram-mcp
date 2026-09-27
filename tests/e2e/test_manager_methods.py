@@ -1,5 +1,4 @@
-"""E2E tests for MQTTManager methods — is_connected, disconnect/reconnect,
-and stale detection.
+"""E2E tests for MQTTManager methods (is_connected, reconnect, stale detection).
 
 These test the manager's actual behavior with a live MQTT connection,
 covering the unhappy paths that unit tests mock away.
@@ -11,7 +10,7 @@ import time
 
 import pytest
 
-from instagram_mcp.mqtt.manager import MQTTManager, _STALE_TIMEOUT
+from instagram_mcp.mqtt.manager import _STALE_TIMEOUT, MQTTManager
 
 pytestmark = pytest.mark.e2e
 
@@ -55,8 +54,6 @@ class TestManagerDisconnectReconnect:
         shared_thread_id,
     ):
         """Disconnect → verify dead → reconnect → verify alive."""
-        from pathlib import Path
-
         from tests.e2e.conftest import BOT1_SESSION
 
         iris = bot1_client.get_iris_info()
@@ -85,4 +82,3 @@ class TestManagerDisconnectReconnect:
         assert mgr.is_connected is True
 
         mgr.disconnect()
-

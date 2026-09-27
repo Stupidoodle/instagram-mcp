@@ -5,14 +5,17 @@ import struct
 import threading
 import time
 import zlib
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from instagram_mcp.mqtt.connection import PINGREQ, PINGRESP, PUBACK, PUBLISH
-from instagram_mcp.mqtt.events import MessageEvent, SeenEvent, TypingEvent
-from instagram_mcp.mqtt.manager import MQTTManager, _PINGREQ_RESPONSE_TIMEOUT, _STALE_TIMEOUT
+from instagram_mcp.mqtt.events import MessageEvent
+from instagram_mcp.mqtt.manager import _PINGREQ_RESPONSE_TIMEOUT, _STALE_TIMEOUT, MQTTManager
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _make_session_file(tmp_path: Path) -> Path:
@@ -413,6 +416,7 @@ class TestMQTTManagerStaleDetection:
         finally:
             manager_mod._KEEPALIVE_INTERVAL = original
 
+
 class TestMQTTManagerReaderLoopPacketTypes:
     """Tests for handling different MQTT packet types in the reader loop."""
 
@@ -534,6 +538,7 @@ class TestMQTTManagerReaderLoopPacketTypes:
 
         # Monkey-patch the keepalive to trigger immediately
         import instagram_mcp.mqtt.manager as manager_mod
+
         original = manager_mod._KEEPALIVE_INTERVAL
         manager_mod._KEEPALIVE_INTERVAL = 0  # Trigger immediately
         try:
@@ -574,6 +579,7 @@ class TestMQTTManagerReaderLoopPacketTypes:
 
         mgr._handle_publish(first_byte, body)
         mock_conn.send_puback.assert_not_called()
+
 
 class TestMQTTManagerDisconnect:
     """Tests for disconnect edge cases."""
@@ -627,7 +633,13 @@ def _publish_body(text: str) -> tuple[int, bytes]:
                     "op": "add",
                     "path": "/direct_v2/threads/T1/items/I1",
                     "value": json.dumps(
-                        {"item_id": "I1", "user_id": 5, "text": text, "item_type": "text", "timestamp": "0"}
+                        {
+                            "item_id": "I1",
+                            "user_id": 5,
+                            "text": text,
+                            "item_type": "text",
+                            "timestamp": "0",
+                        }
                     ),
                 }
             ],
@@ -649,6 +661,7 @@ class TestMQTTManagerListener:
 
         assert len(received) == 1
         assert received[0].text == "pushed"
+
 
 class TestMQTTManagerWatchdog:
     def test_watchdog_reconnects_until_disconnect(self) -> None:
