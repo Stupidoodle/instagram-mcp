@@ -32,6 +32,7 @@ class MessageEvent(Event):
     transcript: str | None = None  # voice notes
     media_error: str | None = None  # why the download or transcription failed
     view_mode: str | None = None  # disappearing photos: "once", "replayable" or "permanent"
+    backfilled: bool = False  # filled in from history after the session missed it
 
 
 @dataclass(frozen=True)

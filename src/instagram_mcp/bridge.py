@@ -42,6 +42,7 @@ from instagram_mcp.client import (
 )
 from instagram_mcp.config import get_settings, setup_logging
 from instagram_mcp.ephemeral import sweep
+from instagram_mcp.event_log import EventLog
 from instagram_mcp.media import InboundMedia
 from instagram_mcp.mqtt.events import (
     MessageEvent,
@@ -56,7 +57,7 @@ from instagram_mcp.seen_log import SeenLog
 
 if TYPE_CHECKING:
     import socket
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncIterator, Sequence
     from datetime import datetime
     from pathlib import Path
 
@@ -139,6 +140,7 @@ class Gateway:
         self._media: InboundMedia | None = None
         self._sweeper: asyncio.Task[None] | None = None
         self.seen_log: SeenLog | None = None
+        self.events = EventLog(self.settings.instagram_replay_events)
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -198,7 +200,7 @@ class Gateway:
                 logger.warning("Could not record a seen event", exc_info=True)
         payload = event_to_dict(event)
         if payload is not None:
-            self._fan_out(f"data: {json.dumps(payload)}\n\n")
+            self._fan_out(self.events.record(json.dumps(payload)))
 
     def _download_media(self, event: MessageEvent) -> Path:
         """Download an inbound message's media (on a worker thread)."""
@@ -274,9 +276,13 @@ def gw() -> Gateway:
 # ── HTTP: domain event stream ──────────────────────────────────────────────
 
 
-async def event_stream(g: Gateway, q: asyncio.Queue[str | None]) -> AsyncIterator[str]:
-    """One subscriber's SSE lines, until the gateway closes the stream."""
+async def event_stream(
+    g: Gateway, q: asyncio.Queue[str | None], first: Sequence[str] = ()
+) -> AsyncIterator[str]:
+    """One subscriber's SSE lines (``first`` frames, then live), until the stream closes."""
     yield ": connected\n\n"
+    for frame in first:
+        yield frame
     try:
         while True:
             try:
@@ -291,10 +297,18 @@ async def event_stream(g: Gateway, q: asyncio.Queue[str | None]) -> AsyncIterato
         g.remove_subscriber(q)
 
 
-async def sse_events(_request: Request) -> StreamingResponse:
-    """SSE stream of every domain event; clients filter to their threads."""
+async def sse_events(request: Request) -> StreamingResponse:
+    """SSE stream of every domain event; clients filter to their threads.
+
+    A client that sends ``Last-Event-ID`` gets the events it missed replayed first.
+    """
     g = gw()
-    return StreamingResponse(event_stream(g, g.add_subscriber()), media_type="text/event-stream")
+    last = request.headers.get("last-event-id") or request.query_params.get("last_event_id")
+    # No await between the snapshot and subscribing: nothing can slip in between.
+    replay, gap = g.events.since(last)
+    q = g.add_subscriber()
+    first = [g.events.hello(gap), *replay]
+    return StreamingResponse(event_stream(g, q, first), media_type="text/event-stream")
 
 
 # ── HTTP: commands + reads (each delegates to the one instagrapi login) ─────

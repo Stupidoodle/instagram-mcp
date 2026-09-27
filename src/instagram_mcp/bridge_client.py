@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, Any
+import time
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import httpx2
 
@@ -27,7 +28,9 @@ from instagram_mcp.mqtt.events import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable, Iterator
+
+    from instagram_mcp.catch_up import CatchUp
 
 logger = logging.getLogger("instagram_mcp.bridge_client")
 
@@ -227,49 +230,94 @@ def stream_events(
     on_event: Callable[[Event], None],
     stop: Callable[[], bool],
     *,
+    catch_up: CatchUp | None = None,
     transport: httpx2.BaseTransport | None = None,
 ) -> None:
     """Consume the bridge's /events SSE forever, calling `on_event` per domain event.
 
     Reconnects with backoff until `stop()` returns True. Runs in a daemon thread;
     `on_event` (the channel's handle) is called on that thread and must not block.
-    `transport` is for tests.
+    With `catch_up`, events go through it instead: it resumes from the last event
+    Claude Code got (Last-Event-ID) and fills gaps from history. `transport` is for tests.
     """
     base_url = base_url.rstrip("/")
     backoff = 1.0
     while not stop():
         try:
             timeout = httpx2.Timeout(10.0, read=None)
+            last = catch_up.last_event_id() if catch_up else None
+            headers = {"Last-Event-ID": last} if last else {}
             with (
                 httpx2.Client(base_url=base_url, timeout=timeout, transport=transport) as client,
-                client.stream("GET", "/events") as resp,
+                client.stream("GET", "/events", headers=headers) as resp,
             ):
                 # The response must stay open while it is read: iterate inside the block.
                 resp.raise_for_status()
                 backoff = 1.0
                 logger.info("Connected to bridge events at %s/events", base_url)
-                for line in resp.iter_lines():
+                for frame in sse_frames(resp.iter_lines()):
                     if stop():
                         return
-                    if not line or not line.startswith("data: "):
-                        continue
-                    try:
-                        payload = json.loads(line[len("data: ") :])
-                    except json.JSONDecodeError:
-                        continue
-                    event = event_from_dict(payload)
-                    if event is not None:
-                        try:
-                            on_event(event)
-                        except Exception:
-                            logger.exception("Channel handler failed on %s", type(event).__name__)
+                    _dispatch(frame, on_event, catch_up)
         except Exception:
             if stop():
                 return
             logger.warning(
                 "Bridge event stream dropped; reconnecting in %.0fs", backoff, exc_info=True
             )
-            import time
-
             time.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
+
+
+class SSEFrame(NamedTuple):
+    """One server-sent event: its name, id and data."""
+
+    event: str
+    id: str | None
+    data: str
+
+
+def sse_frames(lines: Iterable[str]) -> Iterator[SSEFrame]:
+    """Group SSE lines into frames (a blank line ends one; comments are skipped)."""
+    event: str = "message"
+    event_id: str | None = None
+    data: list[str] = []
+    for line in lines:
+        if not line:
+            if data:
+                yield SSEFrame(event, event_id, "\n".join(data))
+            event, event_id, data = "message", None, []
+            continue
+        if line.startswith(":"):
+            continue
+        field, _, value = line.partition(":")
+        value = value.removeprefix(" ")
+        if field == "data":
+            data.append(value)
+        elif field == "id":
+            event_id = value
+        elif field == "event":
+            event = value
+    if data:
+        yield SSEFrame(event, event_id, "\n".join(data))
+
+
+def _dispatch(frame: SSEFrame, on_event: Callable[[Event], None], catch_up: CatchUp | None) -> None:
+    try:
+        payload = json.loads(frame.data)
+    except json.JSONDecodeError:
+        return
+    if frame.event == "hello":
+        if catch_up is not None and payload.get("gap"):
+            catch_up.fill_gap()
+        return
+    event = event_from_dict(payload)
+    if event is None:
+        return
+    try:
+        if catch_up is not None:
+            catch_up.deliver(event, frame.id)
+        else:
+            on_event(event)
+    except Exception:
+        logger.exception("Channel handler failed on %s", type(event).__name__)

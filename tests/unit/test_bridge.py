@@ -167,6 +167,14 @@ class TestShutdown:
         assert lines == [": connected\n\n", "data: {}\n\n"]
         assert g._subscribers == set()
 
+    async def test_replayed_frames_come_before_live_ones(self) -> None:
+        g = _bare_gateway()
+        q = g.add_subscriber()
+        g._fan_out("id: b-3\ndata: {}\n\n")
+        g.close_streams()
+        lines = [line async for line in event_stream(g, q, ["event: hello\n", "id: b-2\n"])]
+        assert lines == [": connected\n\n", "event: hello\n", "id: b-2\n", "id: b-3\ndata: {}\n\n"]
+
     async def test_the_server_closes_streams_before_waiting_on_connections(self) -> None:
         g = MagicMock()
         server = bridge.BridgeServer(uvicorn.Config(MagicMock()))

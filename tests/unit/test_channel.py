@@ -43,7 +43,7 @@ def _describe(thread_id: str) -> tuple[str, dict[str, str]]:
 def _channel(**kwargs: Any) -> tuple[Channel, list[tuple[str, dict[str, str]]]]:
     channel = Channel(self_user_id=ME, describe_thread=_describe, **kwargs)
     sent: list[tuple[str, dict[str, str]]] = []
-    channel._emit = lambda content, meta: sent.append((content, meta))  # type: ignore[method-assign]
+    channel._emit = lambda content, meta, _on_sent=None: sent.append((content, meta))  # type: ignore[method-assign]
     return channel, sent
 
 
@@ -404,6 +404,24 @@ class TestSessionPush:
         assert channel._idle_task is not None
         channel._idle_task.cancel()
 
+    async def test_on_sent_runs_only_after_the_write(self) -> None:
+        channel = Channel(self_user_id=ME, describe_thread=_describe)
+        channel.subscribe(T1, "alex")
+        sent: list[str] = []
+        channel.handle(_msg(), on_sent=lambda: sent.append("held"))
+        assert sent == []  # held until a session attaches
+        session = MagicMock()
+        session.send_notification = AsyncMock()
+        channel.attach(session)
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert sent == ["held"]
+        session.send_notification = AsyncMock(side_effect=OSError("pipe closed"))
+        await channel._send("x", {}, lambda: sent.append("failed"))
+        assert sent == ["held"]  # a failed write doesn't count
+        assert channel._idle_task is not None
+        channel._idle_task.cancel()
+
     async def test_send_without_session_is_a_noop(self) -> None:
         channel = Channel(self_user_id=ME, describe_thread=_describe)
         await channel._send("x", {})
@@ -480,6 +498,17 @@ class TestMedia:
         content, meta = sent[-1]
         assert content == "[voice note]"
         assert meta["media_error"] == "transcription failed: boom"
+
+
+class TestBackfilled:
+    def test_a_backfilled_message_says_so(self) -> None:
+        channel, sent = _channel()
+        channel.subscribe(T1, "alex")
+        channel.handle(_msg(backfilled=True))
+        _content, meta = sent[-1]
+        assert meta["backfilled"] == "true"
+        channel.handle(_msg(item_id="i2"))
+        assert "backfilled" not in sent[-1][1]
 
 
 class TestDisappearingPhotos:

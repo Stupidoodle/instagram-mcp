@@ -91,6 +91,12 @@ def _view_once_meta(event: MessageEvent) -> dict[str, str]:
     return meta
 
 
+def _flags(event: MessageEvent, from_me: bool) -> dict[str, str]:
+    """is_from_me (the owner typed it) and backfilled (it came while offline)."""
+    flags = {"is_from_me": from_me, "backfilled": event.backfilled}
+    return {key: "true" for key, on in flags.items() if on}
+
+
 def _visual_kind(path: str) -> str:
     return "video" if path.endswith((".mp4", ".mov")) else "photo"
 
@@ -108,6 +114,8 @@ CHANNEL_METHOD: Final = "notifications/claude/channel"
 _ECHO_WINDOW_SECONDS = 60
 # Events that arrive before the client finishes the handshake are held briefly.
 _PENDING_MAX = 100
+# A held push: content, meta, and what to run once it's written to Claude Code.
+type _Push = tuple[str, dict[str, str], Callable[[], None] | None]
 
 INSTRUCTIONS = """Instagram DM channel. Conversations are addressed by a short ALIAS (e.g. "alex").
 You never type a raw thread id except once, in subscribe.
@@ -116,6 +124,7 @@ INCOMING EVENTS (subscribed chats only) arrive as <channel source="instagram" ch
 - Message: attributes chat, user, message_id, ts. Media adds media_type and media_path
   (Read it); voice notes come as their transcript. is_from_me="true": the owner
   sent it from their phone. A message event means it's your turn: reply right away.
+  backfilled="true": it came while you were offline; answer only if still relevant.
 - View-once: view_once="true" is a disappearing photo/video. With media_path, Read it
   now (it's deleted soon) and never save, copy or send it anywhere. Without one it
   can't be opened; never pretend you saw it.
@@ -221,9 +230,7 @@ class Channel:
 
         self._session: ServerSession | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._pending: collections.deque[tuple[str, dict[str, str]]] = collections.deque(
-            maxlen=_PENDING_MAX
-        )
+        self._pending: collections.deque[_Push] = collections.deque(maxlen=_PENDING_MAX)
         self._idle_task: asyncio.Task[None] | None = None
 
     # ── Subscriptions ────────────────────────────────────────────────────────
@@ -258,6 +265,11 @@ class Channel:
             if chat is not None:
                 self._aliases.pop(chat.alias, None)
         return chat.alias if chat else thread_id
+
+    def thread_ids(self) -> list[str]:
+        """Subscribed thread ids (the control thread included)."""
+        with self._lock:
+            return list(self._chats)
 
     def subscriptions(self) -> list[str]:
         """Human-readable list of subscribed chats."""
@@ -356,8 +368,11 @@ class Channel:
 
     # ── MQTT → channel ───────────────────────────────────────────────────────
 
-    def handle(self, event: Event) -> None:
-        """Convert one MQTT event into a channel push (MQTT reader thread)."""
+    def handle(self, event: Event, on_sent: Callable[[], None] | None = None) -> None:
+        """Convert one event into a channel push (event-stream thread).
+
+        ``on_sent`` runs once the notification is written to Claude Code, not before.
+        """
         with self._lock:
             chat = self._chats.get(event.thread_id)
         if chat is None:
@@ -384,7 +399,7 @@ class Channel:
             chat.nudge_interval = None
             if their_message:
                 chat.idle_override = None  # their message resets set_idle
-        self._emit(content, meta)
+        self._emit(content, meta, on_sent)
 
     def _build(self, chat: _Chat, event: Event) -> tuple[str, dict[str, str]] | None:  # noqa: PLR0911
         from_me = str(getattr(event, "user_id", "")) == self._self_user_id
@@ -451,9 +466,7 @@ class Channel:
             meta |= {"event_type": "edit", "target_message_id": event.item_id, "user": user}
             return f"[edited → {text}]", meta
 
-        meta |= {"user": user, "message_id": event.item_id}
-        if from_me:
-            meta["is_from_me"] = "true"
+        meta |= {"user": user, "message_id": event.item_id} | _flags(event, from_me)
         if event.link_url:
             meta["link_url"] = event.link_url
         if event.link_title:
@@ -516,21 +529,25 @@ class Channel:
         self._session = session
         self._loop = asyncio.get_running_loop()
         while self._pending:
-            content, meta = self._pending.popleft()
-            self._loop.create_task(self._send(content, meta))
+            content, meta, on_sent = self._pending.popleft()
+            self._loop.create_task(self._send(content, meta, on_sent))
         if self._idle_task is None or self._idle_task.done():
             self._idle_task = self._loop.create_task(self._idle_heartbeat())
         logger.info("Channel attached (%d subscriptions)", len(self._chats))
 
-    def _emit(self, content: str, meta: dict[str, str]) -> None:
+    def _emit(
+        self, content: str, meta: dict[str, str], on_sent: Callable[[], None] | None = None
+    ) -> None:
         """Push from any thread; held until the session attaches."""
         loop = self._loop
         if loop is None or loop.is_closed():
-            self._pending.append((content, meta))
+            self._pending.append((content, meta, on_sent))
             return
-        asyncio.run_coroutine_threadsafe(self._send(content, meta), loop)
+        asyncio.run_coroutine_threadsafe(self._send(content, meta, on_sent), loop)
 
-    async def _send(self, content: str, meta: dict[str, str]) -> None:
+    async def _send(
+        self, content: str, meta: dict[str, str], on_sent: Callable[[], None] | None = None
+    ) -> None:
         session = self._session
         if session is None:
             return
@@ -539,7 +556,17 @@ class Channel:
         )
         # ServerSession's typed union has no vendor notifications; it only needs
         # a model with method + params and writes it to the standalone stream.
-        await session.send_notification(cast("ServerNotification", notification))
+        try:
+            await session.send_notification(cast("ServerNotification", notification))
+        except Exception:
+            # Not written, so not counted: catch-up replays it on the next connect.
+            logger.warning("Could not push to Claude Code", exc_info=True)
+            return
+        if on_sent is not None:
+            try:
+                on_sent()
+            except Exception:
+                logger.warning("Recording a sent event failed", exc_info=True)
 
     # ── Idle heartbeat ───────────────────────────────────────────────────────
 

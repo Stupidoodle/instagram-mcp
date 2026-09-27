@@ -70,6 +70,15 @@ class Settings(BaseSettings):
         default=Path("media"),
         description="Where inbound and requested photos, videos and voice clips are saved",
     )
+    instagram_replay_events: int = Field(
+        default=2000,
+        ge=0,
+        description="Recent events the bridge keeps to replay to a reconnecting client",
+    )
+    instagram_channel_state: Path | None = Field(
+        default=None,
+        description="Where the thin client remembers its last event (default: cwd)",
+    )
     instagram_seen_db: Path = Field(
         default=Path("seen.db"),
         description="SQLite log of live read receipts, for per-message read times",

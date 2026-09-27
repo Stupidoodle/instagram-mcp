@@ -12,6 +12,7 @@ import threading
 from typing import TYPE_CHECKING
 
 from instagram_mcp.bridge_client import BridgeClient, stream_events
+from instagram_mcp.catch_up import CatchUp, ChannelState, state_path
 from instagram_mcp.channel import INSTRUCTIONS, Channel, ChannelError, ChannelMCPServer
 from instagram_mcp.config import Settings, get_settings, setup_logging
 from instagram_mcp.tools import (
@@ -83,12 +84,16 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     )
 
     # Consume the bridge's domain-event SSE stream on a daemon thread. It reconnects
-    # on its own and buffers into the channel until the session attaches.
+    # on its own, buffers into the channel until the session attaches, and catches up
+    # on whatever this persona missed while it was offline.
     _stop_events.clear()
     channel = _channel
+    state = settings.instagram_channel_state or state_path(channel.thread_ids())
+    catch_up = CatchUp(ChannelState(state), _bridge.messages, channel.thread_ids, channel.handle)
     threading.Thread(
         target=stream_events,
         args=(settings.instagram_bridge_url, channel.handle, _stop_events.is_set),
+        kwargs={"catch_up": catch_up},
         name="bridge-events",
         daemon=True,
     ).start()

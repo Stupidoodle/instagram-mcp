@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import json
 from typing import TYPE_CHECKING
+from unittest.mock import MagicMock
 
 import httpx2
 import pytest
 
 from instagram_mcp.bridge import event_to_dict
-from instagram_mcp.bridge_client import BridgeClient, BridgeError, event_from_dict, stream_events
+from instagram_mcp.bridge_client import (
+    BridgeClient,
+    BridgeError,
+    SSEFrame,
+    event_from_dict,
+    sse_frames,
+    stream_events,
+)
 from instagram_mcp.mqtt.events import (
     Event,
     MessageEvent,
@@ -197,3 +205,51 @@ class TestStreamEvents:
         assert len(got) == 1
         assert isinstance(got[0], MessageEvent)
         assert got[0].text == "hi"
+
+
+class TestCatchUpStream:
+    def test_frames_group_lines_and_skip_comments(self) -> None:
+        lines = [": connected", "", "event: hello", 'data: {"gap": true}', "", "id: b1-1"]
+        lines += ["data: {}", "", "data: tail"]
+        assert list(sse_frames(lines)) == [
+            SSEFrame("hello", None, '{"gap": true}'),
+            SSEFrame("message", "b1-1", "{}"),
+            SSEFrame("message", None, "tail"),
+        ]
+
+    def test_resumes_fills_the_gap_and_routes_through_catch_up(self) -> None:
+        message = {
+            "type": "message",
+            "thread_id": "t1",
+            "item_id": "i1",
+            "user_id": "42",
+            "text": "hi",
+            "item_type": "text",
+            "timestamp": 1,
+        }
+        body = (
+            b'event: hello\ndata: {"boot": "b1", "seq": 5, "gap": true}\n\n'
+            b"id: b1-5\ndata: " + json.dumps(message).encode() + b"\n\n"
+        )
+        sent_ids: list[str | None] = []
+
+        def handler(request: httpx2.Request) -> httpx2.Response:
+            sent_ids.append(request.headers.get("last-event-id"))
+            return httpx2.Response(200, content=body)
+
+        catch_up = MagicMock()
+        catch_up.last_event_id.return_value = "b1-2"
+        delivered: list[tuple[Event, str | None]] = []
+        catch_up.deliver.side_effect = lambda e, i: delivered.append((e, i))
+        stream_events(
+            "http://bridge",
+            lambda _e: None,
+            lambda: bool(delivered) or len(sent_ids) >= 3,
+            catch_up=catch_up,
+            transport=httpx2.MockTransport(handler),
+        )
+        assert sent_ids[0] == "b1-2"
+        catch_up.fill_gap.assert_called_once_with()
+        ((event, event_id),) = delivered
+        assert isinstance(event, MessageEvent)
+        assert event_id == "b1-5"
