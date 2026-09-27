@@ -5,9 +5,9 @@ from __future__ import annotations
 import time
 from datetime import datetime
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 import uvicorn
 
 from instagram_mcp import bridge
@@ -21,6 +21,9 @@ from instagram_mcp.mqtt.events import (
     TypingEvent,
     UnsendEvent,
 )
+
+if TYPE_CHECKING:
+    import pytest
 
 
 class TestEventToDict:

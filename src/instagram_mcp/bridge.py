@@ -25,7 +25,6 @@ import json
 import logging
 import sys
 import time
-from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 import httpx2
@@ -58,6 +57,7 @@ from instagram_mcp.seen_log import SeenLog
 if TYPE_CHECKING:
     import socket
     from collections.abc import AsyncIterator
+    from datetime import datetime
     from pathlib import Path
 
     from starlette.requests import Request
