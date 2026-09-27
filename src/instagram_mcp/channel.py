@@ -22,7 +22,8 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from mcp.types import InitializeResult, Notification
+from mcp.types import DiscoverResult, InitializeResult, Notification
+from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 
 from instagram_mcp.mqtt.events import (
     MessageEvent,
@@ -436,11 +437,19 @@ class Channel:
     async def middleware(
         self, ctx: ServerRequestContext[Any, Any], call_next: CallNext
     ) -> HandlerResult:
-        """Server middleware: advertise the channel and attach once initialized."""
+        """Server middleware: advertise the channel and attach once the client is ready.
+
+        Handshake era: advertise on ``initialize``, attach on
+        ``notifications/initialized``. 2026-07-28+ has no handshake: advertise on
+        ``server/discover`` and attach on the first request after it, so no push
+        can reach the client before it has seen the capability.
+        """
         result = await call_next(ctx)
-        if ctx.method == "initialize":
+        if ctx.method in ("initialize", "server/discover"):
             return _advertise_channel(result)
-        if ctx.method == "notifications/initialized":
+        if ctx.method == "notifications/initialized" or (
+            self._session is None and ctx.protocol_version in MODERN_PROTOCOL_VERSIONS
+        ):
             self.attach(ctx.session)
         return result
 
@@ -542,8 +551,8 @@ def _zone(tz: str | None) -> ZoneInfo | None:
 
 
 def _advertise_channel(result: HandlerResult) -> HandlerResult:
-    """Add ``experimental["claude/channel"]`` to an initialize result."""
-    if isinstance(result, InitializeResult):
+    """Add ``experimental["claude/channel"]`` to an initialize or discover result."""
+    if isinstance(result, InitializeResult | DiscoverResult):
         caps = result.capabilities
         experimental = {**(caps.experimental or {}), CHANNEL_CAPABILITY: {}}
         return result.model_copy(

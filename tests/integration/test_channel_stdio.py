@@ -7,9 +7,26 @@ import time
 from pathlib import Path
 from typing import Any
 
-from mcp_types.version import LATEST_HANDSHAKE_VERSION
+from mcp_types.version import LATEST_HANDSHAKE_VERSION, LATEST_MODERN_VERSION
 
 SERVER = Path(__file__).with_name("channel_stdio_server.py")
+
+# 2026-07-28+ has no initialize handshake: every request carries this envelope.
+MODERN_META = {
+    "io.modelcontextprotocol/protocolVersion": LATEST_MODERN_VERSION,
+    "io.modelcontextprotocol/clientInfo": {"name": "claude-code", "version": "test"},
+    "io.modelcontextprotocol/clientCapabilities": {},
+}
+
+
+def _spawn() -> subprocess.Popen[str]:
+    return subprocess.Popen(  # noqa: S603 - our own server script, fixed argv
+        [sys.executable, str(SERVER)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
 
 
 def _send(proc: subprocess.Popen[str], message: dict[str, Any]) -> None:
@@ -33,13 +50,7 @@ def _read_until(proc: subprocess.Popen[str], match: Any, timeout: float = 10) ->
 
 
 def test_channel_capability_and_push_over_stdio() -> None:
-    proc = subprocess.Popen(  # noqa: S603 - our own server script, fixed argv
-        [sys.executable, str(SERVER)],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
+    proc = _spawn()
     try:
         _send(
             proc,
@@ -69,6 +80,35 @@ def test_channel_capability_and_push_over_stdio() -> None:
         tools = _read_until(proc, lambda m: m.get("id") == 2)
         names = {t["name"] for t in tools["result"]["tools"]}
         assert {"subscribe", "unsubscribe", "list_subscriptions", "set_idle"} <= names
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_channel_capability_and_push_over_modern_protocol() -> None:
+    """Claude Code negotiates 2026-07-28: server/discover, no handshake."""
+    proc = _spawn()
+    try:
+        _send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "server/discover",
+                "params": {"_meta": MODERN_META},
+            },
+        )
+        discover = _read_until(proc, lambda m: m.get("id") == 1)
+        assert discover["result"]["capabilities"]["experimental"]["claude/channel"] == {}
+
+        _send(
+            proc,
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {"_meta": MODERN_META}},
+        )
+        pushed = _read_until(proc, lambda m: m.get("method") == "notifications/claude/channel")
+        assert pushed["params"]["content"] == "hey from mqtt"
+        assert pushed["params"]["meta"]["chat"] == "ly"
+        assert pushed["params"]["meta"]["message_id"] == "i1"
     finally:
         proc.kill()
         proc.wait()
