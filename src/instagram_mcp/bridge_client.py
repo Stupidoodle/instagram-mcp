@@ -54,6 +54,7 @@ def event_from_dict(d: dict[str, Any]) -> Event | None:  # noqa: PLR0911
                 media_path=d.get("media_path"),
                 transcript=d.get("transcript"),
                 media_error=d.get("media_error"),
+                view_mode=d.get("view_mode"),
             )
         if kind == "reaction":
             return ReactionEvent(

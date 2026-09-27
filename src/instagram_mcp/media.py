@@ -23,8 +23,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("instagram_mcp.media")
 
-# Direct photos/videos and voice notes. View-once (raven_media) is never downloaded.
-MEDIA_ITEM_TYPES = {"media", "voice_media"}
+# Direct photos/videos, voice notes and disappearing photos (raven_media). Where a
+# disappearing photo lands, kept or temporary, is the downloader's call by view mode.
+MEDIA_ITEM_TYPES = {"media", "voice_media", "raven_media"}
 
 
 class InboundMedia:

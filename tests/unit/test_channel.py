@@ -480,3 +480,37 @@ class TestMedia:
         content, meta = sent[-1]
         assert content == "[voice note]"
         assert meta["media_error"] == "transcription failed: boom"
+
+
+class TestDisappearingPhotos:
+    def test_keep_in_chat_is_a_normal_photo(self) -> None:
+        channel, sent = _channel()
+        channel.subscribe(T1, "alex")
+        channel.handle(
+            _msg(text=None, item_type="raven_media", view_mode="permanent", media_path="/m/p.jpg")
+        )
+        content, meta = sent[-1]
+        assert content == "[photo]"
+        assert meta["media_path"] == "/m/p.jpg"
+        assert "view_once" not in meta
+
+    def test_view_once_points_at_the_temporary_file(self) -> None:
+        channel, sent = _channel()
+        channel.subscribe(T1, "alex")
+        channel.handle(
+            _msg(text=None, item_type="raven_media", view_mode="once", media_path="/tmp/e/p.jpg")
+        )
+        content, meta = sent[-1]
+        assert "/tmp/e/p.jpg" in content
+        assert "never save or forward" in content
+        assert meta["view_once"] == "true"
+        assert meta["view_mode"] == "once"
+        assert meta["media_path"] == "/tmp/e/p.jpg"
+
+    def test_view_once_that_could_not_be_loaded(self) -> None:
+        channel, sent = _channel()
+        channel.subscribe(T1, "alex")
+        channel.handle(_msg(text=None, item_type="raven_media", view_mode="once"))
+        content, meta = sent[-1]
+        assert "can't be opened" in content
+        assert meta["view_once"] == "true"

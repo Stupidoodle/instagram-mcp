@@ -34,6 +34,7 @@ class TestEventToDict:
             "media_path": None,
             "transcript": None,
             "media_error": None,
+            "view_mode": None,
         }
 
     def test_reaction(self) -> None:

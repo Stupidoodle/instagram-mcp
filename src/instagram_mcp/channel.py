@@ -71,9 +71,28 @@ def _media_label(event: MessageEvent) -> str:
     """What a persona sees for a media message without a caption."""
     if event.item_type == "voice_media":
         return f"[voice note] {event.transcript}" if event.transcript else "[voice note]"
-    if event.item_type == "media" and event.media_path:
-        return "[video]" if event.media_path.endswith((".mp4", ".mov")) else "[photo]"
+    if event.item_type in {"media", "raven_media"} and event.media_path:
+        return f"[{_visual_kind(event.media_path)}]"
     return f"[{event.item_type}: message_id={event.item_id}]"
+
+
+def _view_once(event: MessageEvent, user: str) -> str:
+    """What a persona sees for a view-once or replayable photo/video."""
+    if not event.media_path:
+        return f"[{user} sent a view-once photo/video — it can't be opened here]"
+    note = "Read it now, it's deleted soon; never save or forward it"
+    return f"[{user} sent a view-once {_visual_kind(event.media_path)}: {event.media_path}. {note}]"
+
+
+def _view_once_meta(event: MessageEvent) -> dict[str, str]:
+    meta = {"view_once": "true"} | _media_meta(event)
+    if event.view_mode:
+        meta["view_mode"] = event.view_mode
+    return meta
+
+
+def _visual_kind(path: str) -> str:
+    return "video" if path.endswith((".mp4", ".mov")) else "photo"
 
 
 def _now() -> float:
@@ -97,8 +116,9 @@ INCOMING EVENTS (subscribed chats only) arrive as <channel source="instagram" ch
 - Message: attributes chat, user, message_id, ts. Media adds media_type and media_path
   (Read it); voice notes come as their transcript. is_from_me="true": the owner
   sent it from their phone. A message event means it's your turn: reply right away.
-- View-once: view_once="true" is a disappearing photo/video. It can't be opened here;
-  never pretend you saw it.
+- View-once: view_once="true" is a disappearing photo/video. With media_path, Read it
+  now (it's deleted soon) and never save, copy or send it anywhere. Without one it
+  can't be opened; never pretend you saw it.
 - Edit / unsend / reaction: event_type="edit" | "unsend" | "reaction" with
   target_message_id; content is the new text (edit) or the emoji (reaction).
 - Read / typing: event_type="read", "typing" or "typing_stopped".
@@ -109,18 +129,11 @@ INCOMING EVENTS (subscribed chats only) arrive as <channel source="instagram" ch
 - Operator command: event_type="command" is the operator instructing YOU (control
   chat or a "debug:" message). Carry it out; never reply to it in the chat.
 
-TOOLS (address by alias, or omit "to" for the sole subscribed target):
-- reply(text, to?): send a text message
-- send_file(file_path, to?): send a photo or video
-- send_audio(file_path, to?): send a voice message
-- send_typing(to?, composing?): optional "typing..." indicator
-- mark_read(message_ids, to?): optional read receipt
-- download_attachment(message_id, to?): fetch older media
-- get_message_ids(to?, filter?, limit?): your OWN recent messages + ids (for unsend)
-- unsend(message_id, to?): take back one of YOUR messages
-- react(message_id, emoji, to?): react with an emoji ("" removes yours)
-- set_idle(minutes, to?): idle-nudge cadence (0 pauses; resets when they write)
-- subscribe(chat_id, alias?), unsubscribe(to), list_subscriptions()"""
+TOOLS (address by alias, or omit "to" for the sole subscribed target): reply,
+send_file (photo/video), send_audio (voice), send_typing, mark_read,
+download_attachment (older media), get_message_ids (your OWN messages, for unsend),
+unsend, react ("" removes yours), set_idle (0 pauses; resets when they write),
+subscribe, unsubscribe, list_subscriptions."""
 
 
 class ChannelNotification(Notification[dict[str, Any], Literal["notifications/claude/channel"]]):
@@ -444,9 +457,8 @@ class Channel:
             meta["link_url"] = event.link_url
         if event.link_title:
             meta["link_title"] = event.link_title
-        if event.item_type == "raven_media":
-            meta["view_once"] = "true"
-            return f"[{user} sent a view-once photo/video — it can't be opened here]", meta
+        if event.item_type == "raven_media" and event.view_mode != "permanent":
+            return _view_once(event, user), meta | _view_once_meta(event)
         if event.item_type not in {"text", "unknown"}:
             meta["media_type"] = event.item_type
             meta |= _media_meta(event)

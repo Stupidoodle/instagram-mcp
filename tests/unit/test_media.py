@@ -79,13 +79,21 @@ async def test_photo_arrives_with_path_and_is_not_transcribed() -> None:
     assert h.transcribed == []
 
 
-async def test_own_media_and_view_once_pass_through_untouched() -> None:
+async def test_own_media_passes_through_untouched() -> None:
     h = Harness()
     own = _msg("voice_media", user=int(ME))
-    view_once = _msg("raven_media", item_id="i2")
-    await _run(h, own, view_once)
-    assert h.delivered == [own, view_once]
+    await _run(h, own)
+    assert h.delivered == [own]
     assert h.downloads == []
+
+
+async def test_disappearing_photos_are_fetched_but_never_transcribed() -> None:
+    # Where they land (temporary or kept) is the downloader's call, by view mode.
+    h = Harness()
+    await _run(h, _msg("raven_media", item_id="once"), _msg("raven_media", item_id="kept"))
+    assert h.downloads == ["once", "kept"]
+    assert h.transcribed == []
+    assert all(isinstance(e, MessageEvent) and e.media_path for e in h.delivered)
 
 
 async def test_a_failed_download_still_delivers_with_an_error() -> None:

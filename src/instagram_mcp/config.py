@@ -5,6 +5,7 @@ variables using pydantic-settings.
 """
 
 import logging
+import tempfile
 from pathlib import Path
 from typing import Literal
 
@@ -68,6 +69,15 @@ class Settings(BaseSettings):
     instagram_media_dir: Path = Field(
         default=Path("media"),
         description="Where inbound and requested photos, videos and voice clips are saved",
+    )
+    instagram_ephemeral_dir: Path = Field(
+        default=Path(tempfile.gettempdir()) / "instagram-ephemeral",
+        description="Owner-only temporary folder for view-once and replayable photos",
+    )
+    instagram_ephemeral_ttl_minutes: int = Field(
+        default=15,
+        ge=1,
+        description="View-once and replayable photos are deleted this long after download",
     )
     instagram_transcriber_url: str = Field(
         default="http://127.0.0.1:8090",

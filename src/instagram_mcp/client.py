@@ -1013,21 +1013,31 @@ class InstagramClient:
             )
         )
 
-    def download_message_media(self, thread_id: str, message_id: str, folder: Path) -> Path:
+    def download_message_media(
+        self,
+        thread_id: str,
+        message_id: str,
+        folder: Path,
+        ephemeral_folder: Path | None = None,
+    ) -> Path:
         """Download the photo, video or voice clip of a message.
 
-        View-once media is refused: it was meant to be seen once, on the phone.
+        Disappearing photos: "keep in chat" ones are saved like any photo. View-once and
+        replayable ones are only saved into ``ephemeral_folder`` (owner-only, swept by
+        the caller); without one they are refused.
 
         Args:
             thread_id: ID of the thread.
             message_id: ID of the message with the media.
             folder: Where to save the file.
+            ephemeral_folder: Where view-once/replayable media may go, temporarily.
 
         Returns:
             Path: The downloaded file.
 
         Raises:
-            InstagramClientError: If the message isn't found, is view-once, or has no media.
+            InstagramClientError: If the message isn't found, is view-once without an
+                ephemeral folder, or has no media.
         """
         thread = self._retry_on_rate_limit(
             self.client.direct_thread, thread_id=int(thread_id), amount=50
@@ -1036,11 +1046,18 @@ class InstagramClient:
         if item is None:
             msg = f"message {message_id} not in the latest 50 of this thread"
             raise InstagramClientError(msg)
+        ephemeral = False
         if item.item_type == "raven_media":
-            msg = "view-once media isn't downloadable"
-            raise InstagramClientError(msg)
-        media = item.media
-        url = media and (media.video_url or media.audio_url or media.thumbnail_url)
+            visual = item.visual_media
+            if getattr(visual, "view_mode", None) != "permanent":
+                if ephemeral_folder is None:
+                    msg = "view-once media is only downloaded into a temporary folder"
+                    raise InstagramClientError(msg)
+                folder, ephemeral = ephemeral_folder, True
+            url = _visual_media_url(visual)
+        else:
+            media = item.media
+            url = media and (media.video_url or media.audio_url or media.thumbnail_url)
         if not url:
             msg = f"message {message_id} ({item.item_type}) has no downloadable media"
             raise InstagramClientError(msg)
@@ -1050,6 +1067,9 @@ class InstagramClient:
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"{thread_id[-6:]}-{message_id}{suffix}"
         path.write_bytes(response.content)
+        if ephemeral:
+            folder.chmod(0o700)
+            path.chmod(0o600)
         return path
 
     def send_voice(self, path: Path, thread_id: str) -> DirectMessage | None:
@@ -1204,6 +1224,19 @@ def _suffix_for(content_type: str, url: str) -> str:
     if known:
         return known
     return Path(httpx2.URL(url).path).suffix or ".bin"
+
+
+def _visual_media_url(visual: Any) -> str | None:
+    """Best URL of a disappearing photo or video: the first video version, else image."""
+    content = getattr(visual, "media", None)
+    if content is None:
+        return None
+    if content.video_versions:
+        return str(content.video_versions[0].url)
+    images = content.image_versions2
+    if images and images.candidates:
+        return str(images.candidates[0].url)
+    return None
 
 
 def _to_m4a(source: Path, folder: Path) -> Path:

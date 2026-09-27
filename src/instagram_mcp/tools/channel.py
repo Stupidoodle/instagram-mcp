@@ -212,7 +212,7 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
     def download_attachment(message_id: str, to: str | None = None) -> dict[str, Any]:
         """Download a message's photo, video or voice clip; returns the path on the bridge host.
 
-        View-once media can't be downloaded.
+        View-once media lands in a temporary folder and is deleted soon; never keep it.
 
         Args:
             message_id: Message id from the channel event.

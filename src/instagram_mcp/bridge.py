@@ -40,6 +40,7 @@ from instagram_mcp.client import (
     SessionError,
 )
 from instagram_mcp.config import get_settings, setup_logging
+from instagram_mcp.ephemeral import sweep
 from instagram_mcp.media import InboundMedia
 from instagram_mcp.mqtt.events import (
     MessageEvent,
@@ -79,6 +80,7 @@ def event_to_dict(event: Event) -> dict[str, Any] | None:  # noqa: PLR0911
             "media_path": event.media_path,
             "transcript": event.transcript,
             "media_error": event.media_error,
+            "view_mode": event.view_mode,
         }
     if isinstance(event, ReactionEvent):
         return {
@@ -131,6 +133,7 @@ class Gateway:
         self._subscribers: set[asyncio.Queue[str]] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._media: InboundMedia | None = None
+        self._sweeper: asyncio.Task[None] | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -148,6 +151,7 @@ class Gateway:
             transcribe=self._transcribe,
             deliver=self._deliver,
         )
+        self._sweeper = self._loop.create_task(self._sweep_ephemeral())
         iris = self.client.get_iris_info()
         self.mqtt = MQTTManager()
         self.mqtt.set_listener(self._on_event)
@@ -165,6 +169,8 @@ class Gateway:
 
     def stop(self) -> None:
         """Disconnect the MQTT connection (called on app shutdown)."""
+        if self._sweeper is not None:
+            self._sweeper.cancel()
         if self.mqtt is not None:
             self.mqtt.disconnect()
 
@@ -184,12 +190,30 @@ class Gateway:
     def _download_media(self, event: MessageEvent) -> Path:
         """Download an inbound message's media (on a worker thread)."""
         folder = self.settings.instagram_media_dir.resolve() / event.thread_id
+        ephemeral = self.settings.instagram_ephemeral_dir.resolve()
         try:
-            return self.client.download_message_media(event.thread_id, event.item_id, folder)
+            return self.client.download_message_media(
+                event.thread_id, event.item_id, folder, ephemeral
+            )
         except InstagramClientError:
             # The push can beat the REST API by a moment; try once more.
             time.sleep(2)
-            return self.client.download_message_media(event.thread_id, event.item_id, folder)
+            return self.client.download_message_media(
+                event.thread_id, event.item_id, folder, ephemeral
+            )
+
+    async def _sweep_ephemeral(self) -> None:
+        """Delete view-once and replayable downloads once their time is up."""
+        ttl = self.settings.instagram_ephemeral_ttl_minutes * 60
+        while True:
+            try:
+                removed = await asyncio.to_thread(sweep, self.settings.instagram_ephemeral_dir, ttl)
+            except OSError:
+                logger.warning("Sweeping view-once downloads failed", exc_info=True)
+            else:
+                if removed:
+                    logger.info("Deleted %d expired view-once download(s)", removed)
+            await asyncio.sleep(60)
 
     async def _transcribe(self, path: Path) -> str:
         url = self.settings.instagram_transcriber_url.rstrip("/") + "/transcribe"
@@ -370,7 +394,11 @@ async def download(request: Request) -> JSONResponse:
     g = gw()
     try:
         path = await run_in_threadpool(
-            g.client.download_message_media, thread_id, message_id, g.settings.instagram_media_dir
+            g.client.download_message_media,
+            thread_id,
+            message_id,
+            g.settings.instagram_media_dir,
+            g.settings.instagram_ephemeral_dir,
         )
     except Exception as e:
         return _err(str(e), 502)

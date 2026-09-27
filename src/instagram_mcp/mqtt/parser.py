@@ -246,6 +246,8 @@ def _parse_message(
     action_log = value.get("action_log")
     if text is None and item_type == "action_log" and isinstance(action_log, dict):
         text = action_log.get("description")
+    visual = value.get("visual_media")
+    view_mode = visual.get("view_mode") if isinstance(visual, dict) else None
     link_url, link_title = None, None
     link = value.get("link")
     if isinstance(link, dict):
@@ -267,6 +269,7 @@ def _parse_message(
         edited=edited,
         link_url=link_url,
         link_title=link_title,
+        view_mode=view_mode,
     )
 
 

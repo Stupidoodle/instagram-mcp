@@ -752,6 +752,14 @@ def _ig_message(mid: str, item_type: str, **media: str | None) -> MagicMock:
     return item
 
 
+def _raven(mid: str, view_mode: str, url: str = "https://cdn/r/pic.jpg") -> MagicMock:
+    item = MagicMock(id=mid, item_type="raven_media", media=None)
+    item.visual_media.view_mode = view_mode
+    item.visual_media.media.video_versions = None
+    item.visual_media.media.image_versions2.candidates = [MagicMock(url=url)]
+    return item
+
+
 class TestChannelClientMethods:
     def test_react_and_remove(self, instagram_client: InstagramClient) -> None:
         ig = instagram_client.client
@@ -780,6 +788,33 @@ class TestChannelClientMethods:
         get.assert_called_once_with("https://cdn/x/photo.jpg", timeout=60, follow_redirects=True)
         assert path == tmp_path / "media" / "456789-9.jpg"
         assert path.read_bytes() == b"jpeg"
+
+    def test_keep_in_chat_downloads_like_a_photo(
+        self, instagram_client: InstagramClient, tmp_path: Path
+    ) -> None:
+        instagram_client.client.direct_thread.return_value = MagicMock(
+            messages=[_raven("9", "permanent")]
+        )
+        response = MagicMock(content=b"jpeg", headers={"content-type": "image/jpeg"})
+        with patch("instagram_mcp.client.httpx2.get", return_value=response) as get:
+            path = instagram_client.download_message_media("123456789", "9", tmp_path / "media")
+        get.assert_called_once_with("https://cdn/r/pic.jpg", timeout=60, follow_redirects=True)
+        assert path == tmp_path / "media" / "456789-9.jpg"
+
+    def test_view_once_goes_to_the_ephemeral_folder_owner_only(
+        self, instagram_client: InstagramClient, tmp_path: Path
+    ) -> None:
+        instagram_client.client.direct_thread.return_value = MagicMock(
+            messages=[_raven("9", "once")]
+        )
+        response = MagicMock(content=b"jpeg", headers={"content-type": "image/jpeg"})
+        with patch("instagram_mcp.client.httpx2.get", return_value=response):
+            path = instagram_client.download_message_media(
+                "123456789", "9", tmp_path / "media", ephemeral_folder=tmp_path / "eph"
+            )
+        assert path.parent == tmp_path / "eph"
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert not (tmp_path / "media").exists()
 
     def test_download_prefers_video_and_url_suffix(
         self, instagram_client: InstagramClient, tmp_path: Path

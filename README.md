@@ -14,7 +14,7 @@ events. Nothing polls. The channel tools use the same names as the WhatsApp chan
 - `send_file` / `send_audio` - Send a photo or video / a voice message (converted to `.m4a`)
 - `send_typing` / `mark_read` - Typing indicator / "Seen"
 - `react` / `unsend` / `get_message_ids` - React, take back your own messages
-- `download_attachment` - Fetch a photo, video or voice clip (view-once media is never downloaded)
+- `download_attachment` - Fetch a photo, video or voice clip (view-once media only to a temporary folder)
 - `set_idle` - Tune the idle-nudge cadence per chat
 
 **Reading**
@@ -123,6 +123,8 @@ Now Claude can decide: engage with their "wait" or finish the thought.
 | `INSTAGRAM_DEBUG_PREFIX` | `debug:` | Own messages with this prefix become operator commands |
 | `INSTAGRAM_TZ` | host zone | Time zone for the idle event's clock |
 | `INSTAGRAM_MEDIA_DIR` | `media` | Where `download_attachment` saves files |
+| `INSTAGRAM_EPHEMERAL_DIR` | `$TMPDIR/instagram-ephemeral` | Owner-only folder for view-once and replayable photos |
+| `INSTAGRAM_EPHEMERAL_TTL_MINUTES` | `15` | View-once downloads are deleted this long after download |
 
 ### E2E tests
 

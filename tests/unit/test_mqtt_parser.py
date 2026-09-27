@@ -468,6 +468,27 @@ class TestParseLinkItem:
         assert events[0].link_url == "https://example.com/s"
 
 
+class TestParseRavenItem:
+    """Disappearing photos carry their view mode (once / replayable / permanent)."""
+
+    def test_view_mode_is_kept(self) -> None:
+        value = {
+            "item_id": "30000000000000000000000000000000006",
+            "user_id": 42,
+            "timestamp": 1,
+            "item_type": "raven_media",
+            "visual_media": {"view_mode": "permanent", "media": {"media_type": 1}},
+        }
+        events, _ = parse_payload(
+            "146",
+            _patches(
+                {"op": "add", "path": "/direct_v2/threads/T1/items/X", "value": json.dumps(value)}
+            ),
+        )
+        assert isinstance(events[0], MessageEvent)
+        assert events[0].view_mode == "permanent"
+
+
 class TestParseIrisTypingEvent:
     def test_activity_indicator(self) -> None:
         """Typing indicator via topic 146 activity_indicator path."""
