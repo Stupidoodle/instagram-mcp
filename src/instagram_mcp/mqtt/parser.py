@@ -88,7 +88,7 @@ def parse_payload(topic: str, raw_payload: bytes) -> tuple[list[Event], int]:
 
 
 # Debug hook: when IG_PATCH_LOG is set, append every raw Iris patch (op, path,
-# truncated value) to that file, so the real shape of e.g. reactions can be seen
+# full value) to that file, so the real shape of e.g. reactions can be seen
 # without guessing. Off unless the env var is set.
 _PATCH_LOG = os.environ.get("IG_PATCH_LOG")
 
@@ -98,7 +98,7 @@ def _log_raw_patch(op: str, path: str, value_str: Any) -> None:
         return
     # Debug logging must never break parsing.
     with contextlib.suppress(Exception), open(_PATCH_LOG, "a") as f:  # noqa: PTH123
-        f.write(f"{op}\t{path}\t{str(value_str)[:600]}\n")
+        f.write(f"{op}\t{path}\t{value_str}\n")
 
 
 def _parse_iris_payload(data: Any) -> tuple[list[Event], int]:
