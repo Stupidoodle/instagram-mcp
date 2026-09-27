@@ -109,6 +109,19 @@ class TestConvertMessage:
         assert msg.content.media_type == MediaType.TEXT
         assert msg.is_sent_by_viewer is True
 
+    def test_convert_message_reactions(self, mock_ig_message: MagicMock) -> None:
+        mock_ig_message.reactions = MagicMock(
+            emojis=[MagicMock(sender_id=42, emoji="🩷")],
+            likes=[{"sender_id": 43, "timestamp": 1}, "unexpected"],
+        )
+
+        msg = _convert_message(mock_ig_message, "123456789")
+
+        assert [(r.user_id, r.emoji) for r in msg.reactions] == [("42", "🩷"), ("43", "❤️")]
+
+    def test_convert_message_without_reactions(self, mock_ig_message: MagicMock) -> None:
+        assert _convert_message(mock_ig_message, "123456789").reactions == []
+
     def test_convert_message_no_text(self, mock_ig_message: MagicMock) -> None:
         mock_ig_message.text = None
         mock_ig_message.item_type = "media"

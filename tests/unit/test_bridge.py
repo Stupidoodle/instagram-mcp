@@ -125,6 +125,7 @@ class TestJsonSerializers:
             timestamp=datetime(2024, 1, 15, 10, 30, 0),
             is_sent_by_viewer=True,
             seen_since=5,
+            reactions=[SimpleNamespace(user_id="2", emoji="🩷")],
         )
         data = _msg_json(msg)
         assert data == {
@@ -139,6 +140,7 @@ class TestJsonSerializers:
             "timestamp": "2024-01-15T10:30:00",
             "is_from_me": True,
             "seen_since": 5,
+            "reactions": [{"user_id": "2", "emoji": "🩷"}],
         }
 
 

@@ -78,6 +78,7 @@ def mock_ig_message(mock_ig_user: MagicMock) -> MagicMock:
     msg.item_type = "text"
     msg.media = None
     msg.link = None
+    msg.reactions = None
     return msg
 
 

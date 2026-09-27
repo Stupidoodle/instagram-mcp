@@ -32,6 +32,7 @@ from instagram_mcp.models.schemas import (
     DirectThread,
     MediaType,
     MessageContent,
+    Reaction,
     ThreadUser,
 )
 
@@ -423,6 +424,7 @@ def _convert_message(
         content=content,
         timestamp=msg.timestamp,
         is_sent_by_viewer=is_sent,
+        reactions=_convert_reactions(getattr(msg, "reactions", None)),
         seen_since=seen_since,
     )
 
@@ -1224,6 +1226,18 @@ def _suffix_for(content_type: str, url: str) -> str:
     if known:
         return known
     return Path(httpx2.URL(url).path).suffix or ".bin"
+
+
+def _convert_reactions(reactions: Any) -> list[Reaction]:
+    """Emoji reactions on a message; a plain double-tap like counts as ❤️."""
+    if reactions is None:
+        return []
+    found = [Reaction(user_id=str(r.sender_id), emoji=r.emoji) for r in reactions.emojis or []]
+    for like in reactions.likes or []:
+        sender = like.get("sender_id") if isinstance(like, dict) else None
+        if sender is not None:
+            found.append(Reaction(user_id=str(sender), emoji="❤️"))
+    return found
 
 
 def _visual_media_url(visual: Any) -> str | None:

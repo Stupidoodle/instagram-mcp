@@ -463,6 +463,7 @@ def _msg_json(m: Any) -> dict[str, Any]:
         "timestamp": m.timestamp.isoformat(),
         "is_from_me": m.is_sent_by_viewer,
         "seen_since": m.seen_since,
+        "reactions": [{"user_id": r.user_id, "emoji": r.emoji} for r in m.reactions],
     }
 
 

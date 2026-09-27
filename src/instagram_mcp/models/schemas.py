@@ -65,6 +65,13 @@ class MessageContent(BaseModel):
     link_title: str | None = Field(default=None, description="Preview title of the link")
 
 
+class Reaction(BaseModel):
+    """An emoji reaction someone put on a message."""
+
+    user_id: str = Field(..., description="Who reacted")
+    emoji: str = Field(..., description="The emoji (a plain like is ❤️)")
+
+
 class DirectMessage(BaseModel):
     """Represents a single direct message.
 
@@ -87,6 +94,7 @@ class DirectMessage(BaseModel):
         default=None,
         description="Minutes since recipient saw this message (null if not seen yet)",
     )
+    reactions: list[Reaction] = Field(default_factory=list, description="Reactions on it")
 
 
 class DirectThread(BaseModel):
