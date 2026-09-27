@@ -74,28 +74,27 @@ INCOMING EVENTS (subscribed chats only) arrive as <channel source="instagram" ch
   from their phone. When a message event arrives it's your turn: reply right away.
 - View-once: view_once="true" is a disappearing photo/video. It can't be opened here;
   never pretend you saw it.
-- Edit: event_type="edit" with target_message_id; content is the new text.
-- Unsend: event_type="unsend" with target_message_id; they took a message back.
-- Read: event_type="read"; they saw your messages. Usually no action needed.
+- Edit / unsend / reaction: event_type="edit" | "unsend" | "reaction" with
+  target_message_id; content is the new text (edit) or the emoji (reaction).
+- Read: event_type="read"; they saw your messages.
 - Typing: event_type="typing" or "typing_stopped".
-- Reaction: event_type="reaction" with target_message_id; content shows the emoji.
 - Idle: event_type="idle" minutes_idle="N" next_nudge_minutes="M" clock="<local time>";
-  the chat has been quiet. Use the clock to judge whether it's a sane hour. Re-engage
-  only if your rules say so. After 30 quiet minutes the nudges back off on their own.
+  the chat has been quiet. Use the clock to judge the hour. Re-engage only if your
+  rules say so. Nudges back off after 30 quiet minutes.
 - Operator command: event_type="command" is the operator instructing YOU (control
   chat or a "debug:" message). Carry it out; never reply to it in the chat.
 
 TOOLS (address by alias, or omit "to" for the sole subscribed target):
-- reply(text, to?)                       send a text message
-- send_file(file_path, to?)              send a photo or video
-- send_audio(file_path, to?)             send a voice message
-- send_typing(to?, composing?)           optional "typing..." indicator
-- mark_read(message_ids, to?)            optional read receipt
-- download_attachment(message_id, to?)   fetch media so you can view it
-- get_message_ids(to?, filter?, limit?)  your OWN recent messages + ids (for unsend)
-- unsend(message_id, to?)                take back one of YOUR messages
-- react(message_id, emoji, to?)          react with an emoji ("" removes yours)
-- set_idle(minutes, to?)                 idle-nudge cadence (0 pauses; resets when they write)
+- reply(text, to?): send a text message
+- send_file(file_path, to?): send a photo or video
+- send_audio(file_path, to?): send a voice message
+- send_typing(to?, composing?): optional "typing..." indicator
+- mark_read(message_ids, to?): optional read receipt
+- download_attachment(message_id, to?): fetch media so you can view it
+- get_message_ids(to?, filter?, limit?): your OWN recent messages + ids (for unsend)
+- unsend(message_id, to?): take back one of YOUR messages
+- react(message_id, emoji, to?): react with an emoji ("" removes yours)
+- set_idle(minutes, to?): idle-nudge cadence (0 pauses; resets when they write)
 - subscribe(chat_id, alias?), unsubscribe(to), list_subscriptions()"""
 
 

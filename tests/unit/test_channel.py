@@ -12,6 +12,7 @@ from mcp.types import Implementation, InitializeResult, ServerCapabilities
 from instagram_mcp.channel import (
     CHANNEL_CAPABILITY,
     CHANNEL_METHOD,
+    INSTRUCTIONS,
     Channel,
     ChannelError,
     _advertise_channel,
@@ -399,3 +400,8 @@ class TestSessionPush:
     async def test_send_without_session_is_a_noop(self) -> None:
         channel = Channel(self_user_id=ME, describe_thread=_describe)
         await channel._send("x", {})
+
+
+def test_instructions_fit_claude_codes_limit() -> None:
+    """Claude Code truncates server instructions past 2048 characters."""
+    assert len(INSTRUCTIONS) <= 2048
