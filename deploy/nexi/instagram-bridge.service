@@ -1,0 +1,19 @@
+# The one Instagram connection, fanned out to the MCP sessions over SSE.
+# Settings come from .env in the working directory.
+[Unit]
+Description=Instagram bridge (single Instagram connection, SSE fan-out)
+After=network-online.target
+Wants=network-online.target
+# A broken build must not hammer Instagram with session logins: give up after
+# 5 failed starts in 10 minutes (the next deploy starts it again).
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+WorkingDirectory=%h/Documents/informatik/instagram-mcp
+ExecStart=%h/.local/bin/uv run --frozen instagram-bridge
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
