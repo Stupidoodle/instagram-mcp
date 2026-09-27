@@ -30,13 +30,13 @@ from instagram_mcp.mqtt.events import (
 
 ME = "1000"
 HER = "2000"
-T1 = "340282366841710300949128531777654287254"
-T2 = "340282366841710300949128531777654281111"
+T1 = "340282366841700000000000000000000000001"
+T2 = "340282366841700000000000000000000000002"
 
 
 def _describe(thread_id: str) -> tuple[str, dict[str, str]]:
-    titles = {T1: "Ly Nguyen", T2: "Mika"}
-    return titles.get(thread_id, ""), {HER: "Ly"}
+    titles = {T1: "Alex Muller", T2: "Mika"}
+    return titles.get(thread_id, ""), {HER: "Alex"}
 
 
 def _channel(**kwargs: Any) -> tuple[Channel, list[tuple[str, dict[str, str]]]]:
@@ -60,7 +60,7 @@ def _msg(user: str = HER, text: str | None = "hey", **kwargs: Any) -> MessageEve
 
 class TestSlugify:
     def test_name(self) -> None:
-        assert slugify("Ly Nguyễn!") == "ly-nguyen"
+        assert slugify("Alex Müller!") == "alex-muller"
 
     def test_digits_only_is_no_name(self) -> None:
         assert slugify("12345") == ""
@@ -69,19 +69,19 @@ class TestSlugify:
 class TestSubscriptions:
     def test_alias_derived_from_title(self) -> None:
         channel, _ = _channel()
-        assert channel.subscribe(T1) == "ly-nguyen"
-        assert channel.display(T1) == "ly-nguyen (Ly Nguyen)"
+        assert channel.subscribe(T1) == "alex-muller"
+        assert channel.display(T1) == "alex-muller (Alex Muller)"
 
     def test_explicit_alias_and_resubscribe(self) -> None:
         channel, _ = _channel()
-        assert channel.subscribe(T1, "Ly") == "ly"
-        assert channel.subscribe(T1, "other") == "ly"
+        assert channel.subscribe(T1, "Alex") == "alex"
+        assert channel.subscribe(T1, "other") == "alex"
 
     def test_alias_conflict(self) -> None:
         channel, _ = _channel()
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         with pytest.raises(ChannelError, match="already maps"):
-            channel.subscribe(T2, "ly")
+            channel.subscribe(T2, "alex")
 
     def test_derived_alias_collision_gets_thread_tail(self) -> None:
         channel = Channel(self_user_id=ME, describe_thread=lambda _t: ("Same", {}))
@@ -103,9 +103,9 @@ class TestSubscriptions:
         channel, _ = _channel()
         with pytest.raises(ChannelError, match="no subscribed target"):
             channel.resolve(None)
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         assert channel.resolve(None) == T1
-        assert channel.resolve("ly") == T1
+        assert channel.resolve("alex") == T1
         assert channel.resolve(T2) == T2
         channel.subscribe(T2, "mika")
         with pytest.raises(ChannelError, match="multiple targets"):
@@ -115,15 +115,15 @@ class TestSubscriptions:
 
     def test_control_thread_is_not_a_default_target(self) -> None:
         channel, _ = _channel(control_thread=T2)
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.subscribe(T2, "control")
         assert channel.resolve(None) == T1
         assert any("(control)" in line for line in channel.subscriptions())
 
     def test_unsubscribe(self) -> None:
         channel, _ = _channel()
-        channel.subscribe(T1, "ly")
-        assert channel.unsubscribe("ly") == "ly"
+        channel.subscribe(T1, "alex")
+        assert channel.unsubscribe("alex") == "alex"
         assert channel.subscriptions() == []
         assert channel.display(T1) == f"…{T1[-4:]}"
 
@@ -141,17 +141,17 @@ class TestEvents:
 
     def test_their_message(self) -> None:
         channel, sent = _channel()
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.handle(_msg())
         content, meta = sent[0]
         assert content == "hey"
-        assert meta["chat"] == "ly"
-        assert meta["user"] == "Ly"
+        assert meta["chat"] == "alex"
+        assert meta["user"] == "Alex"
         assert meta["message_id"] == "i1"
         assert "is_from_me" not in meta
 
     def test_unknown_user_is_described_once_more(self) -> None:
-        describe = MagicMock(return_value=("Ly", {}))
+        describe = MagicMock(return_value=("Alex", {}))
         channel = Channel(self_user_id=ME, describe_thread=describe)
         channel._emit = MagicMock()  # type: ignore[method-assign]
         channel.subscribe(T1)
@@ -161,7 +161,7 @@ class TestEvents:
 
     def test_media_and_view_once(self) -> None:
         channel, sent = _channel()
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.handle(_msg(text=None, item_type="media"))
         channel.handle(_msg(text=None, item_type="raven_media", item_id="i2"))
         assert sent[0][1]["media_type"] == "media"
@@ -171,7 +171,7 @@ class TestEvents:
 
     def test_edit(self) -> None:
         channel, sent = _channel()
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.handle(_msg(text="fixed", edited=True))
         channel.handle(_msg(text=None, edited=True))
         channel.handle(_msg(user=ME, text="mine", edited=True))
@@ -182,7 +182,7 @@ class TestEvents:
 
     def test_own_echo_is_dropped_once(self) -> None:
         channel, sent = _channel()
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.expect_echo(T1, "text", "on my way")
         channel.handle(_msg(user=ME, text="on my way"))
         assert sent == []
@@ -191,14 +191,14 @@ class TestEvents:
 
     def test_own_media_echo(self) -> None:
         channel, sent = _channel()
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.expect_echo(T1, "media")
         channel.handle(_msg(user=ME, text=None, item_type="voice_media"))
         assert sent == []
 
     def test_expired_expectation_does_not_match(self, monkeypatch: pytest.MonkeyPatch) -> None:
         channel, sent = _channel()
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.expect_echo(T1, "text", "hi")
         clock = channel._expected[T1][0].deadline + 1
         monkeypatch.setattr("instagram_mcp.channel.time.monotonic", lambda: clock)
@@ -207,22 +207,22 @@ class TestEvents:
 
     def test_debug_prefix_is_a_command(self) -> None:
         channel, sent = _channel()
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.handle(_msg(user=ME, text="debug: back off"))
         assert sent[0] == (
             "back off",
-            {"chat": "ly", "ts": sent[0][1]["ts"], "event_type": "command", "user": "operator"},
+            {"chat": "alex", "ts": sent[0][1]["ts"], "event_type": "command", "user": "operator"},
         )
 
     def test_control_thread_is_a_command(self) -> None:
         channel, sent = _channel(control_thread=T1)
         channel.subscribe(T1, "control")
-        channel.handle(_msg(user=ME, text="pause ly"))
+        channel.handle(_msg(user=ME, text="pause alex"))
         assert sent[0][1]["event_type"] == "command"
 
     def test_unsend_reaction_seen_typing(self) -> None:
         channel, sent = _channel()
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.handle(UnsendEvent(thread_id=T1, item_id="i1", user_id=int(HER)))
         channel.handle(ReactionEvent(T1, "i1", int(HER), "emojis", "😂"))
         channel.handle(ReactionEvent(T1, "i1", int(HER), "likes", None))
@@ -245,7 +245,7 @@ class TestEvents:
 
     def test_own_side_events(self) -> None:
         channel, sent = _channel()
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.expect_echo(T1, "unsend", "i1")
         channel.expect_echo(T1, "reaction", "i1")
         channel.handle(UnsendEvent(thread_id=T1, item_id="i1", user_id=int(ME)))
@@ -267,7 +267,7 @@ class TestEvents:
 class TestIdle:
     def test_nudge_cadence(self) -> None:
         channel, _ = _channel(idle_minutes=5)
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         start = channel._chats[T1].last_activity
         assert channel.idle_nudges(start + 4 * 60) == []
         ((content, meta),) = channel.idle_nudges(start + 5 * 60)
@@ -279,7 +279,7 @@ class TestIdle:
 
     def test_backoff_after_thirty_quiet_minutes(self) -> None:
         channel, _ = _channel(idle_minutes=5, idle_backoff_after_minutes=30, idle_max_minutes=60)
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         start = channel._chats[T1].last_activity
         fired = [m for m in range(0, 400) if channel.idle_nudges(start + m * 60)]
         # every 5 min up to 30, then the gap doubles (10, 20, 40) and caps at 60
@@ -287,7 +287,7 @@ class TestIdle:
 
     def test_backoff_resets_on_activity(self) -> None:
         channel, _ = _channel(idle_minutes=5)
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         start = channel._chats[T1].last_activity
         for m in range(0, 45):
             channel.idle_nudges(start + m * 60)
@@ -297,20 +297,20 @@ class TestIdle:
 
     def test_idle_meta_announces_next_nudge(self) -> None:
         channel, _ = _channel(idle_minutes=5)
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         ((content, meta),) = channel.idle_nudges(channel._chats[T1].last_activity + 5 * 60)
         assert meta["next_nudge_minutes"] == "5"
         assert "next nudge in 5 min" in content
 
     def test_disabled_and_control(self) -> None:
         channel, _ = _channel(idle_minutes=0, control_thread=T2)
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.subscribe(T2, "control")
         assert channel.idle_nudges(channel._chats[T1].last_activity + 3600) == []
 
     def test_set_idle_until_they_write(self) -> None:
         channel, _ = _channel(idle_minutes=5)
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.set_idle(T1, 60)
         start = channel._chats[T1].last_activity
         assert channel.idle_nudges(start + 30 * 60) == []
@@ -319,7 +319,7 @@ class TestIdle:
 
     def test_own_message_keeps_override(self) -> None:
         channel, _ = _channel()
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.set_idle(T1, 0)
         channel.handle(_msg(user=ME, text="from my phone"))
         assert channel._chats[T1].idle_override == 0
@@ -352,7 +352,7 @@ class TestSessionPush:
 
     async def test_middleware_attaches_and_flushes(self) -> None:
         channel = Channel(self_user_id=ME, describe_thread=_describe)
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         channel.handle(_msg())  # before the handshake: held
         session = MagicMock()
         session.send_notification = AsyncMock()
@@ -373,7 +373,7 @@ class TestSessionPush:
         notification = session.send_notification.await_args.args[0]
         assert notification.method == CHANNEL_METHOD
         assert notification.params["content"] == "hey"
-        assert notification.params["meta"]["chat"] == "ly"
+        assert notification.params["meta"]["chat"] == "alex"
 
         other = await channel.middleware(
             MagicMock(method="tools/list"), AsyncMock(return_value={"tools": []})
@@ -384,7 +384,7 @@ class TestSessionPush:
 
     async def test_emit_after_attach_crosses_threads(self) -> None:
         channel = Channel(self_user_id=ME, describe_thread=_describe)
-        channel.subscribe(T1, "ly")
+        channel.subscribe(T1, "alex")
         session = MagicMock()
         session.send_notification = AsyncMock()
         channel.attach(session)

@@ -11,44 +11,44 @@ from instagram_mcp.bridge_client import BridgeClient
 from instagram_mcp.channel import Channel
 from instagram_mcp.tools.channel import register_channel_tools, register_messaging_tools
 
-T1 = "340282366841710300949128531777654287254"
+T1 = "340282366841700000000000000000000000001"
 
 
 class TestSubscriptionTools:
     def setup_method(self) -> None:
         self.mcp = MCPServer("test")
-        self.channel = Channel(self_user_id="1", describe_thread=lambda _t: ("Ly", {}))
+        self.channel = Channel(self_user_id="1", describe_thread=lambda _t: ("Alex", {}))
         register_channel_tools(self.mcp, self.channel)
 
     def _tool(self, name: str) -> Any:
         return self.mcp._tool_manager._tools[name].fn
 
     def test_subscribe_list_unsubscribe(self) -> None:
-        assert self._tool("subscribe")(chat_id=T1, alias="ly")["subscribed"] == "ly"
-        assert self._tool("list_subscriptions")()["subscriptions"] == [f"ly → …{T1[-4:]}"]
-        assert self._tool("unsubscribe")(to="ly") == {"success": True, "unsubscribed": "ly"}
+        assert self._tool("subscribe")(chat_id=T1, alias="alex")["subscribed"] == "alex"
+        assert self._tool("list_subscriptions")()["subscriptions"] == [f"alex → …{T1[-4:]}"]
+        assert self._tool("unsubscribe")(to="alex") == {"success": True, "unsubscribed": "alex"}
 
     def test_refusals(self) -> None:
-        self._tool("subscribe")(chat_id=T1, alias="ly")
-        assert "refused" in self._tool("subscribe")(chat_id="1234567", alias="ly")["error"]
+        self._tool("subscribe")(chat_id=T1, alias="alex")
+        assert "refused" in self._tool("subscribe")(chat_id="1234567", alias="alex")["error"]
         assert "refused" in self._tool("unsubscribe")(to="nope")["error"]
         assert "refused" in self._tool("set_idle")(minutes=-1)["error"]
         assert "refused" in self._tool("set_idle")(minutes=10, to="nope")["error"]
 
     def test_set_idle(self) -> None:
-        self._tool("subscribe")(chat_id=T1, alias="ly")
+        self._tool("subscribe")(chat_id=T1, alias="alex")
         assert (
             self._tool("set_idle")(minutes=60)["idle"]
-            == "60m for ly (Ly) (resets to 5m when they write)"
+            == "60m for alex (Alex) (resets to 5m when they write)"
         )
-        assert self._tool("set_idle")(minutes=0, to="ly")["idle"].startswith("paused")
+        assert self._tool("set_idle")(minutes=0, to="alex")["idle"].startswith("paused")
 
 
 class TestMessagingTools:
     def setup_method(self) -> None:
         self.mcp = MCPServer("test")
-        self.channel = Channel(self_user_id="1", describe_thread=lambda _t: ("Ly", {}))
-        self.channel.subscribe(T1, "ly")
+        self.channel = Channel(self_user_id="1", describe_thread=lambda _t: ("Alex", {}))
+        self.channel.subscribe(T1, "alex")
         self.bridge = MagicMock(spec=BridgeClient)
         register_messaging_tools(self.mcp, self.bridge, self.channel)
 
@@ -58,7 +58,7 @@ class TestMessagingTools:
     def test_reply_expects_its_echo(self) -> None:
         self.bridge.send.return_value = {"success": True, "message_id": "m1"}
         result = self._tool("reply")(text="hey")
-        assert result == {"success": True, "sent": "ly (Ly)", "message_id": "m1"}
+        assert result == {"success": True, "sent": "alex (Alex)", "message_id": "m1"}
         self.bridge.send.assert_called_once_with(T1, "hey")
         # The echo is registered so the MQTT echo of our own send is dropped.
         assert self.channel._consume_expected(T1, "text", "hey")
@@ -161,7 +161,7 @@ class TestMessagingTools:
 
     def test_unsend(self) -> None:
         self.bridge.unsend.return_value = {"success": True}
-        assert self._tool("unsend")(message_id="m1") == {"success": True, "unsent": "ly (Ly)"}
+        assert self._tool("unsend")(message_id="m1") == {"success": True, "unsent": "alex (Alex)"}
         self.bridge.unsend.assert_called_once_with(T1, "m1")
         assert self.channel._consume_expected(T1, "unsend", "m1")
         assert "refused" in self._tool("unsend")(message_id="m1", to="nope")["error"]

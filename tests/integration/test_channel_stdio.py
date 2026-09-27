@@ -72,8 +72,8 @@ def test_channel_capability_and_push_over_stdio() -> None:
         _send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})
         pushed = _read_until(proc, lambda m: m.get("method") == "notifications/claude/channel")
         assert pushed["params"]["content"] == "hey from mqtt"
-        assert pushed["params"]["meta"]["chat"] == "ly"
-        assert pushed["params"]["meta"]["user"] == "Ly"
+        assert pushed["params"]["meta"]["chat"] == "alex"
+        assert pushed["params"]["meta"]["user"] == "Alex"
         assert pushed["params"]["meta"]["message_id"] == "i1"
 
         _send(proc, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
@@ -107,7 +107,7 @@ def test_channel_capability_and_push_over_modern_protocol() -> None:
         )
         pushed = _read_until(proc, lambda m: m.get("method") == "notifications/claude/channel")
         assert pushed["params"]["content"] == "hey from mqtt"
-        assert pushed["params"]["meta"]["chat"] == "ly"
+        assert pushed["params"]["meta"]["chat"] == "alex"
         assert pushed["params"]["meta"]["message_id"] == "i1"
     finally:
         proc.kill()
@@ -155,7 +155,7 @@ def test_claude_code_falls_back_to_the_handshake_and_gets_pushes() -> None:
         _send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})
         pushed = _read_until(proc, lambda m: m.get("method") == "notifications/claude/channel")
         assert pushed["params"]["content"] == "hey from mqtt"
-        assert pushed["params"]["meta"]["chat"] == "ly"
+        assert pushed["params"]["meta"]["chat"] == "alex"
     finally:
         proc.kill()
         proc.wait()

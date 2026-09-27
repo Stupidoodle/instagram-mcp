@@ -78,12 +78,12 @@ class TestCreateServer:
 
     def test_subscribes_from_settings(self, patched_server: SimpleNamespace, mock_settings) -> None:
         settings = mock_settings.model_copy(
-            update={"instagram_subscribe": "ly=111,bad=222", "instagram_control_thread": "999"}
+            update={"instagram_subscribe": "alex=111,bad=222", "instagram_control_thread": "999"}
         )
         create_server(settings)
 
         aliases = {sub.split(" ")[0] for sub in server._channel.subscriptions()}
-        assert aliases == {"ly", "bad", "control"}
+        assert aliases == {"alex", "bad", "control"}
 
 
 class TestGetMcp:

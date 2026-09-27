@@ -14,8 +14,8 @@ from instagram_mcp.channel import INSTRUCTIONS, Channel, ChannelMCPServer
 from instagram_mcp.mqtt.events import MessageEvent
 from instagram_mcp.tools import register_channel_tools
 
-channel = Channel(self_user_id="1", describe_thread=lambda _t: ("Ly", {"2": "Ly"}))
-channel.subscribe("111111", "ly")
+channel = Channel(self_user_id="1", describe_thread=lambda _t: ("Alex", {"2": "Alex"}))
+channel.subscribe("111111", "alex")
 server_cls = ChannelMCPServer if "--claude-code" in sys.argv else MCPServer
 mcp = server_cls("instagram-mcp", instructions=INSTRUCTIONS, middleware=[channel.middleware])
 register_channel_tools(mcp, channel)

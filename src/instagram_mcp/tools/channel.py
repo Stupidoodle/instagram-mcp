@@ -40,8 +40,8 @@ def register_channel_tools(mcp: MCPServer, channel: Channel) -> None:
         search_threads). Only subscribed chats deliver events.
 
         Args:
-            chat_id: Thread id, e.g. '340282366841710300949128531777654287254'.
-            alias: Short memorable handle (e.g. 'ly'). Derived from the thread
+            chat_id: Thread id, e.g. '340282366841700000000000000000000000001'.
+            alias: Short memorable handle (e.g. 'alex'). Derived from the thread
                 title if omitted.
         """
         try:
@@ -116,7 +116,7 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
 
         Args:
             text: Message text.
-            to: Chat alias (e.g. "ly"). Omit for the sole subscribed target.
+            to: Chat alias (e.g. "alex"). Omit for the sole subscribed target.
         """
         try:
             thread_id = target(to)

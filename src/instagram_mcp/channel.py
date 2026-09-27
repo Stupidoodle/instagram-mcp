@@ -65,7 +65,7 @@ _ECHO_WINDOW_SECONDS = 60
 # Events that arrive before the client finishes the handshake are held briefly.
 _PENDING_MAX = 100
 
-INSTRUCTIONS = """Instagram DM channel. Conversations are addressed by a short ALIAS (e.g. "ly").
+INSTRUCTIONS = """Instagram DM channel. Conversations are addressed by a short ALIAS (e.g. "alex").
 You never type a raw thread id except once, in subscribe.
 
 INCOMING EVENTS (subscribed chats only) arrive as <channel source="instagram" chat="<alias>" ...>:
@@ -128,7 +128,7 @@ class _Expected:
 
 
 def slugify(name: str) -> str:
-    """Turn a display name into an alias candidate ("Ly Nguyen" → "ly-nguyen")."""
+    """Turn a display name into an alias candidate ("Alex Muller" → "alex-muller")."""
     ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
     slug = "-".join("".join(c if c.isalnum() else " " for c in ascii_name.lower()).split())
     return "" if slug.isdigit() else slug

@@ -98,7 +98,7 @@ Now Claude can decide: engage with their "wait" or finish the thought.
        "instagram": {
          "command": "uv",
          "args": ["run", "--directory", "/path/to/instagram-mcp", "instagram-mcp"],
-         "env": { "INSTAGRAM_SUBSCRIBE": "ly=340282366841710300949128531777654287254" }
+         "env": { "INSTAGRAM_SUBSCRIBE": "alex=340282366841700000000000000000000000001" }
        }
      }
    }

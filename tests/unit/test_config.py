@@ -142,9 +142,9 @@ class TestSetupLogging:
 class TestSubscriptions:
     def test_parse_aliases_and_bare_ids(self, mock_settings: Settings) -> None:
         settings = mock_settings.model_copy(
-            update={"instagram_subscribe": "ly=111, 222 ,,mika = 333"}
+            update={"instagram_subscribe": "alex=111, 222 ,,mika = 333"}
         )
-        assert settings.subscriptions() == [("ly", "111"), (None, "222"), ("mika", "333")]
+        assert settings.subscriptions() == [("alex", "111"), (None, "222"), ("mika", "333")]
 
     def test_empty(self, mock_settings: Settings) -> None:
         assert mock_settings.subscriptions() == []
