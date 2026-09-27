@@ -217,21 +217,29 @@ class BridgeClient:
 
 
 def stream_events(
-    base_url: str, on_event: Callable[[Event], None], stop: Callable[[], bool]
+    base_url: str,
+    on_event: Callable[[Event], None],
+    stop: Callable[[], bool],
+    *,
+    transport: httpx2.BaseTransport | None = None,
 ) -> None:
     """Consume the bridge's /events SSE forever, calling `on_event` per domain event.
 
     Reconnects with backoff until `stop()` returns True. Runs in a daemon thread;
     `on_event` (the channel's handle) is called on that thread and must not block.
+    `transport` is for tests.
     """
     base_url = base_url.rstrip("/")
     backoff = 1.0
     while not stop():
         try:
             timeout = httpx2.Timeout(10.0, read=None)
-            with httpx2.Client(base_url=base_url, timeout=timeout) as client:
-                with client.stream("GET", "/events") as resp:
-                    resp.raise_for_status()
+            with (
+                httpx2.Client(base_url=base_url, timeout=timeout, transport=transport) as client,
+                client.stream("GET", "/events") as resp,
+            ):
+                # The response must stay open while it is read: iterate inside the block.
+                resp.raise_for_status()
                 backoff = 1.0
                 logger.info("Connected to bridge events at %s/events", base_url)
                 for line in resp.iter_lines():

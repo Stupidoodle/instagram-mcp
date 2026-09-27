@@ -9,7 +9,7 @@ import httpx2
 import pytest
 
 from instagram_mcp.bridge import event_to_dict
-from instagram_mcp.bridge_client import BridgeClient, BridgeError, event_from_dict
+from instagram_mcp.bridge_client import BridgeClient, BridgeError, event_from_dict, stream_events
 from instagram_mcp.mqtt.events import (
     Event,
     MessageEvent,
@@ -145,3 +145,35 @@ class TestBridgeClient:
             raise httpx2.ConnectError("no route", request=request)
 
         assert _client(handler).self_user_id() == ""
+
+
+class TestStreamEvents:
+    def test_delivers_events_from_the_sse_body(self) -> None:
+        event = {
+            "type": "message",
+            "thread_id": "t1",
+            "item_id": "i1",
+            "user_id": "42",
+            "text": "hi",
+            "item_type": "text",
+            "timestamp": 1,
+            "edited": False,
+        }
+        body = b": connected\n\ndata: " + json.dumps(event).encode() + b"\n\n"
+        attempts: list[int] = []
+
+        def handler(request: httpx2.Request) -> httpx2.Response:
+            attempts.append(1)
+            return httpx2.Response(200, content=body)
+
+        got: list[Event] = []
+        # Stop once an event arrived, or after a few reconnects so a regression fails fast.
+        stream_events(
+            "http://bridge",
+            got.append,
+            lambda: bool(got) or len(attempts) >= 3,
+            transport=httpx2.MockTransport(handler),
+        )
+        assert len(got) == 1
+        assert isinstance(got[0], MessageEvent)
+        assert got[0].text == "hi"
