@@ -70,6 +70,10 @@ class Settings(BaseSettings):
         default=Path("media"),
         description="Where inbound and requested photos, videos and voice clips are saved",
     )
+    instagram_seen_db: Path = Field(
+        default=Path("seen.db"),
+        description="SQLite log of live read receipts, for per-message read times",
+    )
     instagram_ephemeral_dir: Path = Field(
         default=Path(tempfile.gettempdir()) / "instagram-ephemeral",
         description="Owner-only temporary folder for view-once and replayable photos",

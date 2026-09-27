@@ -84,3 +84,4 @@ temp/
 
 # Media fetched by download_attachment
 media/
+seen.db

@@ -123,6 +123,7 @@ Now Claude can decide: engage with their "wait" or finish the thought.
 | `INSTAGRAM_DEBUG_PREFIX` | `debug:` | Own messages with this prefix become operator commands |
 | `INSTAGRAM_TZ` | host zone | Time zone for the idle event's clock |
 | `INSTAGRAM_MEDIA_DIR` | `media` | Where `download_attachment` saves files |
+| `INSTAGRAM_SEEN_DB` | `seen.db` | Live read receipts, so history knows when each message was seen (`GET /seen`) |
 | `INSTAGRAM_EPHEMERAL_DIR` | `$TMPDIR/instagram-ephemeral` | Owner-only folder for view-once and replayable photos |
 | `INSTAGRAM_EPHEMERAL_TTL_MINUTES` | `15` | View-once downloads are deleted this long after download |
 

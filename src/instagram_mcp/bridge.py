@@ -52,6 +52,7 @@ from instagram_mcp.mqtt.events import (
     UnsendEvent,
 )
 from instagram_mcp.mqtt.manager import MQTTManager
+from instagram_mcp.seen_log import SeenLog
 
 if TYPE_CHECKING:
     import socket
@@ -136,6 +137,7 @@ class Gateway:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._media: InboundMedia | None = None
         self._sweeper: asyncio.Task[None] | None = None
+        self.seen_log: SeenLog | None = None
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -154,6 +156,7 @@ class Gateway:
             deliver=self._deliver,
         )
         self._sweeper = self._loop.create_task(self._sweep_ephemeral())
+        self.seen_log = SeenLog(self.settings.instagram_seen_db)
         iris = self.client.get_iris_info()
         self.mqtt = MQTTManager()
         self.mqtt.set_listener(self._on_event)
@@ -175,6 +178,8 @@ class Gateway:
             self._sweeper.cancel()
         if self.mqtt is not None:
             self.mqtt.disconnect()
+        if self.seen_log is not None:
+            self.seen_log.close()
 
     # ── event fan-out (called on the MQTT reader thread) ───────────────────
 
@@ -185,6 +190,11 @@ class Gateway:
         self._loop.call_soon_threadsafe(self._media.submit, event)
 
     def _deliver(self, event: Event) -> None:
+        if isinstance(event, SeenEvent) and self.seen_log is not None:
+            try:
+                self.seen_log.add(event)
+            except Exception:
+                logger.warning("Could not record a seen event", exc_info=True)
         payload = event_to_dict(event)
         if payload is not None:
             self._fan_out(f"data: {json.dumps(payload)}\n\n")
@@ -397,6 +407,20 @@ async def unsend(request: Request) -> JSONResponse:
     return JSONResponse({"success": bool(ok)})
 
 
+async def seen(request: Request) -> JSONResponse:
+    """Read receipts of a thread since an epoch time (from the live seen log)."""
+    thread_id = request.query_params.get("thread_id", "")
+    if not thread_id:
+        return _err("thread_id required")
+    try:
+        since = float(request.query_params.get("since", "0"))
+    except ValueError:
+        return _err("since must be epoch seconds")
+    log = gw().seen_log
+    rows = [] if log is None else await run_in_threadpool(log.since, thread_id, since)
+    return JSONResponse({"thread_id": thread_id, "seen": rows})
+
+
 async def download(request: Request) -> JSONResponse:
     """Download a message's media and return the local path."""
     body = await _json(request)
@@ -563,6 +587,7 @@ def build_app() -> Starlette:
         Route("/mark_read", mark_read, methods=["POST"]),
         Route("/typing", typing, methods=["POST"]),
         Route("/download", download, methods=["POST"]),
+        Route("/seen", seen),
         Route("/unsend", unsend, methods=["POST"]),
         Route("/threads", threads),
         Route("/thread", thread),
