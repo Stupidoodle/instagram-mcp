@@ -7,8 +7,10 @@ which pushes it into the live session; nothing waits or polls for replies.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -26,6 +28,20 @@ if TYPE_CHECKING:
     from instagram_mcp.mqtt.events import Event
 
 logger = logging.getLogger("instagram_mcp.mqtt")
+
+# Debug hook shared with the parser: when IG_PATCH_LOG is set, append reader-level
+# lines (raw PUBLISH arrivals) to that file so the receive path can be traced without
+# reading MCP-server stderr. Off unless the env var is set.
+_PATCH_LOG = os.environ.get("IG_PATCH_LOG")
+
+
+def _debug_log(line: str) -> None:
+    if not _PATCH_LOG:
+        return
+    # Debug logging must never break the reader thread.
+    with contextlib.suppress(Exception), open(_PATCH_LOG, "a") as f:  # noqa: PTH123
+        f.write(line + "\n")
+
 
 # Keepalive interval (must be < server's keepalive timeout, typically 60s)
 _KEEPALIVE_INTERVAL = 55
@@ -373,6 +389,7 @@ class MQTTManager:
         """Parse a PUBLISH packet and deliver events to subscribers."""
         topic, packet_id, payload = parse_publish_packet(first_byte, body)
         logger.info("MQTT PUBLISH received: topic=%s (%dB)", topic, len(payload))
+        _debug_log(f"PUBLISH\ttopic={topic}\tlen={len(payload)}")
 
         if packet_id is not None:
             self._conn.send_puback(packet_id)
