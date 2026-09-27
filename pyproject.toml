@@ -31,6 +31,7 @@ dependencies = [
 
 [project.scripts]
 instagram-mcp = "instagram_mcp.server:main"
+instagram-bridge = "instagram_mcp.bridge:main"
 instagram-mcp-login = "instagram_mcp.client:interactive_login"
 
 [dependency-groups]

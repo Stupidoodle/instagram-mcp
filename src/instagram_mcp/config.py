@@ -50,6 +50,18 @@ class Settings(BaseSettings):
         default="INFO",
         description="Logging level",
     )
+    instagram_bridge_host: str = Field(
+        default="127.0.0.1",
+        description="Host the instagram-bridge daemon binds to",
+    )
+    instagram_bridge_port: int = Field(
+        default=8082,
+        description="Port the instagram-bridge daemon listens on (WhatsApp uses 8080/8081)",
+    )
+    instagram_bridge_url: str = Field(
+        default="http://127.0.0.1:8082",
+        description="Base URL the thin instagram-mcp client uses to reach the bridge",
+    )
     instagram_media_dir: Path = Field(
         default=Path("media"),
         description="Where download_attachment saves photos, videos and voice clips",
