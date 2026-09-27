@@ -214,8 +214,51 @@ def _fix_instagrapi_extractors() -> None:
     logger.debug("Replaced instagrapi extractors with fixed versions")
 
 
-# Apply fix when module loads
+def _relax_optional_model_fields() -> None:
+    """Make over-strict instagrapi model fields optional at runtime.
+
+    Vanilla instagrapi declares some fields required that Instagram often omits,
+    so a whole thread/message fails Pydantic validation (e.g. list_threads dies
+    with ``generic_xma.0.video_url Field required``). We relax those fields here
+    instead of hand-editing site-packages, so the fix survives ``uv sync``.
+    """
+    import pydantic
+
+    from instagrapi import types as ig_types
+
+    # (model, field): fields Instagram may leave out but instagrapi marks required.
+    relaxations = [
+        (ig_types.MediaXma, "video_url"),
+    ]
+    changed = False
+    for model, field_name in relaxations:
+        field = getattr(model, "model_fields", {}).get(field_name)
+        if field is None or not field.is_required():
+            continue
+        field.default = None  # a non-Undefined default makes the field optional
+        model.model_rebuild(force=True)
+        changed = True
+        logger.debug("Relaxed %s.%s to optional", model.__name__, field_name)
+
+    # Pydantic compiles a child model's schema INTO each parent, so relaxing MediaXma
+    # above doesn't change DirectMessage (which embeds it) until the parents are also
+    # rebuilt. Force-rebuild every instagrapi model so parents pick up the new child.
+    if changed:
+        for name in dir(ig_types):
+            obj = getattr(ig_types, name)
+            if not (isinstance(obj, type) and issubclass(obj, pydantic.BaseModel)):
+                continue
+            if obj.__module__ != ig_types.__name__:
+                continue  # skip imported bases (pydantic.BaseModel etc.)
+            try:
+                obj.model_rebuild(force=True)
+            except Exception:  # noqa: BLE001 - a model that can't rebuild isn't our target
+                logger.debug("Skipped rebuild of %s", obj.__name__)
+
+
+# Apply fixes when module loads
 _fix_instagrapi_extractors()
+_relax_optional_model_fields()
 
 
 class InstagramClientError(Exception):
