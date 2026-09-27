@@ -6,7 +6,9 @@ messaging tools address those chats by alias.
 
 from __future__ import annotations
 
+import contextlib
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,13 +17,10 @@ from mcp.types import ToolAnnotations
 from instagram_mcp.channel import ChannelError
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from mcp.server.mcpserver import MCPServer
 
+    from instagram_mcp.bridge_client import BridgeClient
     from instagram_mcp.channel import Channel
-    from instagram_mcp.client import InstagramClient
-    from instagram_mcp.mqtt.manager import MQTTManager
 
 logger = logging.getLogger("instagram_mcp")
 
@@ -96,17 +95,20 @@ _PHOTO_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
 _VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v"}
 
 
-def register_messaging_tools(
-    mcp: MCPServer,
-    client: InstagramClient,
-    channel: Channel,
-    mqtt: Callable[[], MQTTManager | None],
-    media_dir: Path,
-) -> None:
-    """Register the WhatsApp-style messaging tools with the MCP server."""
+def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Channel) -> None:
+    """Register the WhatsApp-style messaging tools (all routed through the bridge)."""
 
     def target(to: str | None) -> str:
         return channel.resolve(to)
+
+    def _sent(thread_id: str, result: dict[str, Any]) -> dict[str, Any]:
+        if not result.get("success"):
+            return {"success": False, "error": result.get("error", "not confirmed")}
+        return {
+            "success": True,
+            "sent": channel.display(thread_id),
+            "message_id": result.get("message_id"),
+        }
 
     @mcp.tool()
     def reply(text: str, to: str | None = None) -> dict[str, Any]:
@@ -119,101 +121,74 @@ def register_messaging_tools(
         try:
             thread_id = target(to)
             channel.expect_echo(thread_id, "text", text)
-            message = client.reply_to_thread(thread_id=thread_id, text=text)
+            return _sent(thread_id, bridge.send(thread_id, text))
         except ChannelError as e:
             return _refused(e)
         except Exception as e:
             logger.exception("reply failed")
             return {"success": False, "error": str(e)}
-        if message is None:
-            return {"success": False, "error": "Instagram did not confirm the send"}
-        return {
-            "success": True,
-            "sent": channel.display(thread_id),
-            "message_id": message.message_id,
-        }
 
     @mcp.tool()
     def send_file(file_path: str, to: str | None = None) -> dict[str, Any]:
         """Send a photo or video (Instagram DMs take no other file types).
 
+        The path is read on the bridge host (where Instagram is connected).
+
         Args:
-            file_path: Absolute path to the photo or video.
+            file_path: Path to the photo or video (on the bridge host).
             to: Chat alias. Omit for the sole subscribed target.
         """
-        path = Path(file_path).expanduser()
-        suffix = path.suffix.lower()
-        if not path.is_file():
-            return {"success": False, "error": f"no such file: {path}"}
+        suffix = Path(file_path).suffix.lower()
         if suffix not in _PHOTO_SUFFIXES | _VIDEO_SUFFIXES:
             return {
                 "success": False,
                 "error": f"Instagram DMs only take photos and videos, not {suffix}",
             }
+        kind = "video" if suffix in _VIDEO_SUFFIXES else "photo"
         try:
             thread_id = target(to)
             channel.expect_echo(thread_id, "media")
-            send = client.send_photo if suffix in _PHOTO_SUFFIXES else client.send_video
-            message = send(path=path, thread_ids=[thread_id])
+            return _sent(thread_id, bridge.send_media(thread_id, file_path, kind))
         except ChannelError as e:
             return _refused(e)
         except Exception as e:
             logger.exception("send_file failed")
             return {"success": False, "error": str(e)}
-        if message is None:
-            return {"success": False, "error": "Instagram did not confirm the send"}
-        return {
-            "success": True,
-            "sent": channel.display(thread_id),
-            "message_id": message.message_id,
-        }
 
     @mcp.tool()
     def send_audio(file_path: str, to: str | None = None) -> dict[str, Any]:
-        """Send an audio file as a voice message (converted to .m4a if needed).
+        """Send an audio file as a voice message (bridge converts to .m4a if needed).
+
+        The path is read on the bridge host.
 
         Args:
-            file_path: Absolute path to the audio file.
+            file_path: Path to the audio file (on the bridge host).
             to: Chat alias. Omit for the sole subscribed target.
         """
-        path = Path(file_path).expanduser()
-        if not path.is_file():
-            return {"success": False, "error": f"no such file: {path}"}
         try:
             thread_id = target(to)
             channel.expect_echo(thread_id, "media")
-            message = client.send_voice(path, thread_id)
+            return _sent(thread_id, bridge.send_voice(thread_id, file_path))
         except ChannelError as e:
             return _refused(e)
         except Exception as e:
             logger.exception("send_audio failed")
             return {"success": False, "error": str(e)}
-        if message is None:
-            return {"success": False, "error": "Instagram did not confirm the send"}
-        return {
-            "success": True,
-            "sent": channel.display(thread_id),
-            "message_id": message.message_id,
-        }
 
     @mcp.tool()
     def send_typing(to: str | None = None, composing: bool = True) -> dict[str, Any]:
-        """Optional typing indicator: they see "typing…" while composing is true.
+        """Optional typing indicator: they see "typing..." while composing is true.
 
         Args:
             to: Chat alias. Omit for the sole subscribed target.
             composing: True starts the indicator, false stops it.
         """
-        manager = mqtt()
-        if manager is None:
-            return {"success": False, "error": "no realtime connection this session"}
         try:
-            manager.indicate_activity(target(to), active=composing)
+            return bridge.typing(target(to), active=composing)
         except ChannelError as e:
             return _refused(e)
         except Exception as e:
             return {"success": False, "error": str(e)}
-        return {"success": True}
 
     @mcp.tool()
     def mark_read(message_ids: list[str], to: str | None = None) -> dict[str, Any]:
@@ -226,18 +201,16 @@ def register_messaging_tools(
         if not message_ids:
             return {"success": False, "error": "no message ids"}
         try:
-            thread_id = target(to)
             newest = max(message_ids, key=lambda i: int(i) if i.isdigit() else 0)
-            ok = client.mark_seen(thread_id, newest)
+            return bridge.mark_read(target(to), newest)
         except ChannelError as e:
             return _refused(e)
         except Exception as e:
             return {"success": False, "error": str(e)}
-        return {"success": ok}
 
     @mcp.tool()
     def download_attachment(message_id: str, to: str | None = None) -> dict[str, Any]:
-        """Download a message's photo, video or voice clip and return the local path.
+        """Download a message's photo, video or voice clip; returns the path on the bridge host.
 
         View-once media can't be downloaded.
 
@@ -246,12 +219,11 @@ def register_messaging_tools(
             to: Chat alias. Omit for the sole subscribed target.
         """
         try:
-            path = client.download_message_media(target(to), message_id, media_dir)
+            return bridge.download(target(to), message_id)
         except ChannelError as e:
             return _refused(e)
         except Exception as e:
             return {"success": False, "error": str(e)}
-        return {"success": True, "path": str(path.resolve())}
 
     @mcp.tool()
     def get_message_ids(
@@ -265,8 +237,7 @@ def register_messaging_tools(
             limit: How many to return (default 10).
         """
         try:
-            thread_id = target(to)
-            recent = client.get_messages(thread_id=thread_id, amount=max(limit * 3, 20))
+            recent = bridge.messages(target(to), amount=max(limit * 3, 20))
         except ChannelError as e:
             return _refused(e)
         except Exception as e:
@@ -274,12 +245,15 @@ def register_messaging_tools(
         mine = [
             m
             for m in recent
-            if m.is_sent_by_viewer and (not filter or filter in (m.content.text or ""))
+            if m.get("is_from_me") and (not filter or filter in (m.get("text") or ""))
         ][:limit]
         lines = []
         for m in mine:
-            text = m.content.text or f"[{m.content.media_type.value}]"
-            lines.append(f"{m.message_id} | {m.timestamp:%H:%M} | {text[:80]}")
+            text = m.get("text") or f"[{m.get('media_type')}]"
+            hhmm = ""
+            with contextlib.suppress(ValueError, TypeError):
+                hhmm = datetime.fromisoformat(m["timestamp"]).strftime("%H:%M")
+            lines.append(f"{m.get('message_id')} | {hhmm} | {text[:80]}")
         return {"messages": lines}
 
     @mcp.tool(annotations=ToolAnnotations(destructive_hint=True))
@@ -293,12 +267,12 @@ def register_messaging_tools(
         try:
             thread_id = target(to)
             channel.expect_echo(thread_id, "unsend", message_id)
-            ok = client.delete_message(thread_id=thread_id, message_id=message_id)
+            result = bridge.unsend(thread_id, message_id)
         except ChannelError as e:
             return _refused(e)
         except Exception as e:
             return {"success": False, "error": str(e)}
-        return {"success": ok, "unsent": channel.display(thread_id)}
+        return {"success": result.get("success", False), "unsent": channel.display(thread_id)}
 
     @mcp.tool()
     def react(message_id: str, emoji: str, to: str | None = None) -> dict[str, Any]:
@@ -306,19 +280,22 @@ def register_messaging_tools(
 
         Args:
             message_id: Message id (from a channel event or get_message_ids).
-            emoji: E.g. "❤️"; "" removes your reaction.
+            emoji: E.g. "\u2764\ufe0f"; "" removes your reaction.
             to: Chat alias. Omit for the sole subscribed target.
         """
         try:
             thread_id = target(to)
             remove = emoji == ""
-            current = channel.own_reaction(thread_id, message_id) or "❤️"
+            current = channel.own_reaction(thread_id, message_id) or "\u2764\ufe0f"
             channel.expect_echo(thread_id, "reaction", message_id)
-            ok = client.react(thread_id, message_id, current if remove else emoji, remove=remove)
+            result = bridge.react(
+                thread_id, message_id, current if remove else emoji, remove=remove
+            )
         except ChannelError as e:
             return _refused(e)
         except Exception as e:
             return {"success": False, "error": str(e)}
+        ok = result.get("success", False)
         if ok:
             channel.remember_reaction(thread_id, message_id, emoji)
         return {"success": ok}

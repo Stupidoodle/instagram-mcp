@@ -1,21 +1,21 @@
-"""Instagram MCP Server entry point.
+"""Instagram MCP server — a thin client of the instagram-bridge daemon.
 
-This module provides the main MCP server that exposes Instagram Direct Message
-functionality through the Model Context Protocol, and pushes realtime DM
-events into Claude Code as a channel.
+This process opens NO Instagram connection. It talks to the bridge over HTTP for
+commands/reads and consumes the bridge's domain-event SSE stream, pushing those
+events into Claude Code as a channel. Many sessions can run at once because they
+all share the bridge's single upstream connection (see instagram_mcp.bridge).
 """
 
 from __future__ import annotations
 
-import sys
+import threading
 from typing import TYPE_CHECKING
 
 from mcp.server.mcpserver import MCPServer
 
+from instagram_mcp.bridge_client import BridgeClient, stream_events
 from instagram_mcp.channel import INSTRUCTIONS, Channel, ChannelError
-from instagram_mcp.client import AuthenticationError, InstagramClient, SessionError
 from instagram_mcp.config import Settings, get_settings, setup_logging
-from instagram_mcp.mqtt.manager import MQTTManager
 from instagram_mcp.tools import (
     register_channel_tools,
     register_media_tools,
@@ -27,65 +27,42 @@ from instagram_mcp.tools import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-# Global instances
 _mcp: MCPServer | None = None
-_client: InstagramClient | None = None
-_mqtt_manager: MQTTManager | None = None
+_bridge: BridgeClient | None = None
 _channel: Channel | None = None
+_stop_events = threading.Event()
 
 
-def _thread_describer(client: InstagramClient) -> Callable[[str], tuple[str, dict[str, str]]]:
-    """Look up a thread's title and member names (one REST call per thread)."""
+def _thread_describer(bridge: BridgeClient) -> Callable[[str], tuple[str, dict[str, str]]]:
+    """Look up a thread's title and member names via the bridge (one HTTP call)."""
 
     def describe(thread_id: str) -> tuple[str, dict[str, str]]:
-        thread = client.get_thread(thread_id, amount=1)
-        names = {u.user_id: u.full_name or u.username for u in thread.users}
-        return thread.thread_title, names
+        t = bridge.thread(thread_id, amount=1)
+        names = {u["user_id"]: (u.get("full_name") or u["username"]) for u in t.get("users", [])}
+        return t.get("thread_title", ""), names
 
     return describe
 
 
 def create_server(settings: Settings | None = None) -> MCPServer:
-    """Create and configure the MCP server.
-
-    Args:
-        settings: Optional settings instance. If not provided, loads from environment.
-
-    Returns:
-        MCPServer: Configured MCP server instance.
-
-    Raises:
-        AuthenticationError: If Instagram authentication fails.
-        SessionError: If session loading/saving fails.
-    """
-    global _mcp, _client, _channel  # noqa: PLW0603
+    """Create the thin-client MCP server and start consuming the bridge event stream."""
+    global _mcp, _bridge, _channel  # noqa: PLW0603
 
     if settings is None:
         settings = get_settings()
-
     logger = setup_logging(settings.log_level)
 
-    # Initialize Instagram client
-    _client = InstagramClient(
-        session_file=settings.instagram_session_file,
-        app_version=settings.instagram_app_version,
-    )
-
-    # Try to load session or login
-    try:
-        _client.login_or_load_session(
-            username=settings.instagram_username,
-            password=settings.instagram_password.get_secret_value(),
+    _bridge = BridgeClient(settings.instagram_bridge_url)
+    self_user_id = _bridge.self_user_id()
+    if not self_user_id:
+        logger.warning(
+            "Bridge %s not reachable yet; the event stream and tools will connect when it is.",
+            settings.instagram_bridge_url,
         )
-    except (AuthenticationError, SessionError) as e:
-        logger.error("Authentication failed: %s", e)
-        logger.error("Run 'instagram-mcp-login' to authenticate interactively first.")
-        raise
 
-    # The channel pushes realtime events into the Claude Code session
     _channel = Channel(
-        self_user_id=str(_client.client.user_id or ""),
-        describe_thread=_thread_describer(_client),
+        self_user_id=self_user_id,
+        describe_thread=_thread_describer(_bridge),
         idle_minutes=settings.instagram_idle_minutes,
         idle_backoff_after_minutes=settings.instagram_idle_backoff_after_minutes,
         idle_max_minutes=settings.instagram_idle_max_minutes,
@@ -103,93 +80,49 @@ def create_server(settings: Settings | None = None) -> MCPServer:
 
     _mcp = MCPServer("instagram-mcp", instructions=INSTRUCTIONS, middleware=[_channel.middleware])
 
-    # Initialize MQTT realtime (non-fatal — the tools still work without it)
-    global _mqtt_manager  # noqa: PLW0603
-    try:
-        iris = _client.get_iris_info()
-    except Exception:
-        logger.warning("Could not read Iris info, no realtime events this session", exc_info=True)
-        _mqtt_manager = None
-    else:
-        _mqtt_manager = MQTTManager()
-        _mqtt_manager.set_listener(_channel.handle)
-        try:
-            _mqtt_manager.connect(
-                session_file=settings.instagram_session_file,
-                seq_id=iris["seq_id"],
-                snapshot_at_ms=iris["snapshot_at_ms"],
-                app_version=iris["app_version"],
-            )
-            logger.info(
-                "MQTT realtime connected (seq_id=%d, snapshot=%d)",
-                iris["seq_id"],
-                iris["snapshot_at_ms"],
-            )
-        except Exception:
-            logger.warning("MQTT connection failed, the watchdog keeps retrying", exc_info=True)
-        _mqtt_manager.start_watchdog()
+    # Consume the bridge's domain-event SSE stream on a daemon thread. It reconnects
+    # on its own and buffers into the channel until the session attaches.
+    _stop_events.clear()
+    channel = _channel
+    threading.Thread(
+        target=stream_events,
+        args=(settings.instagram_bridge_url, channel.handle, _stop_events.is_set),
+        name="bridge-events",
+        daemon=True,
+    ).start()
 
-    # Register all tools
     register_channel_tools(_mcp, _channel)
-    register_messaging_tools(
-        _mcp, _client, _channel, get_mqtt_manager, settings.instagram_media_dir
-    )
-    register_thread_tools(_mcp, _client)
-    register_message_tools(_mcp, _client)
-    register_media_tools(_mcp, _client)
+    register_messaging_tools(_mcp, _bridge, _channel)
+    register_thread_tools(_mcp, _bridge)
+    register_message_tools(_mcp, _bridge)
+    register_media_tools(_mcp, _bridge)
 
-    logger.info("Instagram MCP server initialized successfully")
+    logger.info("Instagram MCP thin client ready (bridge=%s)", settings.instagram_bridge_url)
     return _mcp
 
 
 def get_mcp() -> MCPServer:
-    """Get the current MCP server instance.
-
-    Returns:
-        MCPServer: The MCP server instance.
-
-    Raises:
-        RuntimeError: If server hasn't been created yet.
-    """
+    """Return the current MCP server instance, or raise if not created."""
     if _mcp is None:
-        raise RuntimeError("MCP server not initialized. Call create_server() first.")
+        msg = "MCP server not initialized. Call create_server() first."
+        raise RuntimeError(msg)
     return _mcp
 
 
-def get_mqtt_manager() -> MQTTManager | None:
-    """Get the current MQTT manager instance, if connected.
-
-    Returns:
-        MQTTManager if MQTT is active, None otherwise.
-    """
-    return _mqtt_manager
-
-
-def get_client() -> InstagramClient:
-    """Get the current Instagram client instance.
-
-    Returns:
-        InstagramClient: The Instagram client instance.
-
-    Raises:
-        RuntimeError: If client hasn't been created yet.
-    """
-    if _client is None:
-        raise RuntimeError("Instagram client not initialized. Call create_server() first.")
-    return _client
+def get_bridge() -> BridgeClient:
+    """Return the current bridge client, or raise if not created."""
+    if _bridge is None:
+        msg = "Bridge client not initialized. Call create_server() first."
+        raise RuntimeError(msg)
+    return _bridge
 
 
 def main() -> None:
     """Main entry point for the MCP server (stdio transport)."""
     try:
-        mcp = create_server()
-        mcp.run(transport="stdio")
-    except (AuthenticationError, SessionError) as e:
-        print(f"Failed to start server: {e}", file=sys.stderr)
-        print("Run 'instagram-mcp-login' to authenticate first.", file=sys.stderr)
-        sys.exit(1)
+        create_server().run(transport="stdio")
     except KeyboardInterrupt:
-        sys.exit(0)
+        _stop_events.set()
 
 
 if __name__ == "__main__":

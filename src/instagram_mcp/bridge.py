@@ -309,6 +309,16 @@ async def typing(request: Request) -> JSONResponse:
     return JSONResponse({"success": True})
 
 
+async def unsend(request: Request) -> JSONResponse:
+    """Unsend (delete for everyone) one of our own messages."""
+    body = await _json(request)
+    thread_id, message_id = body.get("thread_id"), body.get("message_id")
+    if not thread_id or not message_id:
+        return _err("thread_id and message_id required")
+    ok = await run_in_threadpool(gw().client.delete_message, thread_id, message_id)
+    return JSONResponse({"success": bool(ok)})
+
+
 async def download(request: Request) -> JSONResponse:
     """Download a message's media and return the local path."""
     body = await _json(request)
@@ -331,11 +341,15 @@ def _thread_json(thread: Any) -> dict[str, Any]:
         {"user_id": u.user_id, "username": u.username, "full_name": u.full_name}
         for u in thread.users
     ]
+    last = getattr(thread, "last_activity_at", None)
     return {
         "thread_id": thread.thread_id,
         "thread_title": thread.thread_title,
         "users": users,
         "is_group": thread.is_group,
+        "is_muted": getattr(thread, "is_muted", False),
+        "unread": getattr(thread, "unread", False),
+        "last_activity_at": last.isoformat() if last else None,
     }
 
 
@@ -361,6 +375,7 @@ def _msg_json(m: Any) -> dict[str, Any]:
         "username": m.sender.username,
         "text": m.content.text,
         "media_type": m.content.media_type.value,
+        "media_url": m.content.media_url,
         "timestamp": m.timestamp.isoformat(),
         "is_from_me": m.is_sent_by_viewer,
         "seen_since": m.seen_since,
@@ -377,6 +392,80 @@ async def messages(request: Request) -> JSONResponse:
     return JSONResponse({"thread_id": thread_id, "messages": [_msg_json(m) for m in result]})
 
 
+async def thread(request: Request) -> JSONResponse:
+    """Get one thread with its recent messages."""
+    thread_id = request.query_params.get("thread_id", "")
+    amount = int(request.query_params.get("amount", "20"))
+    if not thread_id:
+        return JSONResponse({"error": "thread_id required"}, status_code=400)
+    t = await run_in_threadpool(gw().client.get_thread, thread_id, amount)
+    data = _thread_json(t)
+    data["messages"] = [_msg_json(m) for m in (t.messages or [])]
+    return JSONResponse(data)
+
+
+async def pending(_request: Request) -> JSONResponse:
+    """List pending (message-request) threads."""
+    result = await run_in_threadpool(gw().client.get_pending_threads)
+    return JSONResponse({"threads": [_thread_json(t) for t in result]})
+
+
+async def hide(request: Request) -> JSONResponse:
+    """Hide/delete a thread from the inbox."""
+    body = await _json(request)
+    if not body.get("thread_id"):
+        return _err("thread_id required")
+    ok = await run_in_threadpool(gw().client.hide_thread, body["thread_id"])
+    return JSONResponse({"success": bool(ok)})
+
+
+async def mark_unread(request: Request) -> JSONResponse:
+    """Mark a thread unread."""
+    body = await _json(request)
+    if not body.get("thread_id"):
+        return _err("thread_id required")
+    ok = await run_in_threadpool(gw().client.mark_thread_unread, body["thread_id"])
+    return JSONResponse({"success": bool(ok)})
+
+
+async def mute(request: Request) -> JSONResponse:
+    """Mute a thread."""
+    body = await _json(request)
+    if not body.get("thread_id"):
+        return _err("thread_id required")
+    ok = await run_in_threadpool(gw().client.mute_thread, body["thread_id"])
+    return JSONResponse({"success": bool(ok)})
+
+
+async def unmute(request: Request) -> JSONResponse:
+    """Unmute a thread."""
+    body = await _json(request)
+    if not body.get("thread_id"):
+        return _err("thread_id required")
+    ok = await run_in_threadpool(gw().client.unmute_thread, body["thread_id"])
+    return JSONResponse({"success": bool(ok)})
+
+
+async def share_media(request: Request) -> JSONResponse:
+    """Share a media post into a thread."""
+    body = await _json(request)
+    media_id, thread_id = body.get("media_id"), body.get("thread_id")
+    if not media_id or not thread_id:
+        return _err("media_id and thread_id required")
+    ok = await run_in_threadpool(gw().client.share_media, media_id, None, [thread_id])
+    return JSONResponse({"success": bool(ok)})
+
+
+async def share_profile(request: Request) -> JSONResponse:
+    """Share a user profile into a thread."""
+    body = await _json(request)
+    user_id, thread_id = body.get("user_id"), body.get("thread_id")
+    if not user_id or not thread_id:
+        return _err("user_id and thread_id required")
+    ok = await run_in_threadpool(gw().client.share_profile, user_id, None, [thread_id])
+    return JSONResponse({"success": bool(ok)})
+
+
 def build_app() -> Starlette:
     """Build the Starlette app: routes + connection lifespan."""
     routes = [
@@ -389,9 +478,18 @@ def build_app() -> Starlette:
         Route("/mark_read", mark_read, methods=["POST"]),
         Route("/typing", typing, methods=["POST"]),
         Route("/download", download, methods=["POST"]),
+        Route("/unsend", unsend, methods=["POST"]),
         Route("/threads", threads),
+        Route("/thread", thread),
         Route("/thread_search", search),
         Route("/messages", messages),
+        Route("/pending", pending),
+        Route("/hide", hide, methods=["POST"]),
+        Route("/mark_unread", mark_unread, methods=["POST"]),
+        Route("/mute", mute, methods=["POST"]),
+        Route("/unmute", unmute, methods=["POST"]),
+        Route("/share_media", share_media, methods=["POST"]),
+        Route("/share_profile", share_profile, methods=["POST"]),
     ]
 
     @contextlib.asynccontextmanager

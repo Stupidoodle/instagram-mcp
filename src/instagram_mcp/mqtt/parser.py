@@ -6,6 +6,7 @@ Skywalker typing indicators.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -95,11 +96,9 @@ _PATCH_LOG = os.environ.get("IG_PATCH_LOG")
 def _log_raw_patch(op: str, path: str, value_str: Any) -> None:
     if not _PATCH_LOG:
         return
-    try:
-        with open(_PATCH_LOG, "a") as f:  # noqa: PTH123
-            f.write(f"{op}\t{path}\t{str(value_str)[:600]}\n")
-    except Exception:  # noqa: BLE001 - debug logging must never break parsing
-        pass
+    # Debug logging must never break parsing.
+    with contextlib.suppress(Exception), open(_PATCH_LOG, "a") as f:  # noqa: PTH123
+        f.write(f"{op}\t{path}\t{str(value_str)[:600]}\n")
 
 
 def _parse_iris_payload(data: Any) -> tuple[list[Event], int]:
