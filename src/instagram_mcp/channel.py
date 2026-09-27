@@ -22,7 +22,19 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from mcp.types import DiscoverResult, InitializeResult, Notification
+import anyio
+from mcp.server.mcpserver import MCPServer
+from mcp.server.stdio import stdio_server
+from mcp.shared.message import SessionMessage
+from mcp.types import (
+    METHOD_NOT_FOUND,
+    DiscoverResult,
+    ErrorData,
+    InitializeResult,
+    JSONRPCError,
+    JSONRPCRequest,
+    Notification,
+)
 from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 
 from instagram_mcp.mqtt.events import (
@@ -562,3 +574,52 @@ def _advertise_channel(result: HandlerResult) -> HandlerResult:
         caps_dict = result.setdefault("capabilities", {})
         caps_dict.setdefault("experimental", {})[CHANNEL_CAPABILITY] = {}
     return result
+
+
+# ── Transport ────────────────────────────────────────────────────────────────
+
+
+class ChannelMCPServer(MCPServer):
+    """An MCPServer that serves stdio in the handshake era Claude Code channels need.
+
+    Claude Code only delivers channel notifications on handshake-era
+    connections; at 2026-07-28 it logs "no unsolicited notification path" and
+    drops them. It opens with an enveloped ``server/discover`` and falls back to
+    ``initialize`` on METHOD_NOT_FOUND, which is what handshake-only servers
+    (like the TypeScript WhatsApp channel) answer. This answers that opening
+    probe the same way, so the SDK picks the era from the ``initialize``.
+    """
+
+    async def run_stdio_async(self) -> None:
+        """Run over stdio, declining the modern opening probe."""
+        async with stdio_server() as (read_stream, write_stream):
+            send, receive = anyio.create_memory_object_stream[SessionMessage | Exception](0)
+
+            async def pump() -> None:
+                opened = False
+                async with send:
+                    async for item in read_stream:
+                        request = _request_of(item)
+                        if request is not None and not opened:
+                            opened = request.method != "server/discover"
+                            if not opened:
+                                await write_stream.send(_method_not_found(request))
+                                continue
+                        await send.send(item)
+
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(pump)
+                lowlevel = self._lowlevel_server
+                await lowlevel.run(receive, write_stream, lowlevel.create_initialization_options())
+                tg.cancel_scope.cancel()
+
+
+def _request_of(item: SessionMessage | Exception) -> JSONRPCRequest | None:
+    if isinstance(item, SessionMessage) and isinstance(item.message, JSONRPCRequest):
+        return item.message
+    return None
+
+
+def _method_not_found(request: JSONRPCRequest) -> SessionMessage:
+    error = ErrorData(code=METHOD_NOT_FOUND, message="Method not found")
+    return SessionMessage(JSONRPCError(jsonrpc="2.0", id=request.id, error=error))

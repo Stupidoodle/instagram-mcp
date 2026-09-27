@@ -19,9 +19,9 @@ MODERN_META = {
 }
 
 
-def _spawn() -> subprocess.Popen[str]:
+def _spawn(*args: str) -> subprocess.Popen[str]:
     return subprocess.Popen(  # noqa: S603 - our own server script, fixed argv
-        [sys.executable, str(SERVER)],
+        [sys.executable, str(SERVER), *args],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -86,7 +86,7 @@ def test_channel_capability_and_push_over_stdio() -> None:
 
 
 def test_channel_capability_and_push_over_modern_protocol() -> None:
-    """Claude Code negotiates 2026-07-28: server/discover, no handshake."""
+    """The middleware also works on a 2026-07-28 connection: server/discover, no handshake."""
     proc = _spawn()
     try:
         _send(
@@ -109,6 +109,53 @@ def test_channel_capability_and_push_over_modern_protocol() -> None:
         assert pushed["params"]["content"] == "hey from mqtt"
         assert pushed["params"]["meta"]["chat"] == "ly"
         assert pushed["params"]["meta"]["message_id"] == "i1"
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_claude_code_falls_back_to_the_handshake_and_gets_pushes() -> None:
+    """Replay Claude Code's exchange with a channel it delivers (the WhatsApp one).
+
+    It probes with an enveloped server/discover, gets METHOD_NOT_FOUND, then
+    initializes at a handshake version on the same connection. At 2026-07-28 it
+    drops channel pushes ("no unsolicited notification path").
+    """
+    proc = _spawn("--claude-code")
+    try:
+        _send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "server/discover",
+                "params": {"_meta": MODERN_META},
+            },
+        )
+        probe = _read_until(proc, lambda m: m.get("id") == 1)
+        assert probe["error"]["code"] == -32601
+
+        _send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "claude-code", "version": "test"},
+                },
+            },
+        )
+        init = _read_until(proc, lambda m: m.get("id") == 2)
+        assert init["result"]["protocolVersion"] == LATEST_HANDSHAKE_VERSION
+        assert init["result"]["capabilities"]["experimental"]["claude/channel"] == {}
+
+        _send(proc, {"jsonrpc": "2.0", "method": "notifications/initialized"})
+        pushed = _read_until(proc, lambda m: m.get("method") == "notifications/claude/channel")
+        assert pushed["params"]["content"] == "hey from mqtt"
+        assert pushed["params"]["meta"]["chat"] == "ly"
     finally:
         proc.kill()
         proc.wait()

@@ -11,10 +11,8 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING
 
-from mcp.server.mcpserver import MCPServer
-
 from instagram_mcp.bridge_client import BridgeClient, stream_events
-from instagram_mcp.channel import INSTRUCTIONS, Channel, ChannelError
+from instagram_mcp.channel import INSTRUCTIONS, Channel, ChannelError, ChannelMCPServer
 from instagram_mcp.config import Settings, get_settings, setup_logging
 from instagram_mcp.tools import (
     register_channel_tools,
@@ -26,6 +24,8 @@ from instagram_mcp.tools import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from mcp.server.mcpserver import MCPServer
 
 _mcp: MCPServer | None = None
 _bridge: BridgeClient | None = None
@@ -78,7 +78,9 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     if settings.instagram_control_thread:
         _channel.subscribe(settings.instagram_control_thread, "control")
 
-    _mcp = MCPServer("instagram-mcp", instructions=INSTRUCTIONS, middleware=[_channel.middleware])
+    _mcp = ChannelMCPServer(
+        "instagram-mcp", instructions=INSTRUCTIONS, middleware=[_channel.middleware]
+    )
 
     # Consume the bridge's domain-event SSE stream on a daemon thread. It reconnects
     # on its own and buffers into the channel until the session attaches.
