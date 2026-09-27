@@ -159,3 +159,42 @@ def test_claude_code_falls_back_to_the_handshake_and_gets_pushes() -> None:
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_claude_code_initialize_queued_behind_a_timed_out_probe() -> None:
+    """A slow start makes Claude Code's probe time out; it then sends initialize.
+
+    Both frames are queued before the server reads stdin. The probe still gets
+    METHOD_NOT_FOUND and the queued initialize opens the handshake era, instead
+    of the probe locking the connection into 2026-07-28 (-32022 on initialize).
+    """
+    proc = _spawn("--claude-code")
+    try:
+        _send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "server/discover",
+                "params": {"_meta": MODERN_META},
+            },
+        )
+        _send(
+            proc,
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": LATEST_HANDSHAKE_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "claude-code", "version": "test"},
+                },
+            },
+        )
+        init = _read_until(proc, lambda m: m.get("id") == 2)
+        assert init["result"]["protocolVersion"] == LATEST_HANDSHAKE_VERSION
+        assert init["result"]["capabilities"]["experimental"]["claude/channel"] == {}
+    finally:
+        proc.kill()
+        proc.wait()
