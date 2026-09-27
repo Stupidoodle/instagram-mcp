@@ -537,6 +537,7 @@ class InstagramClient:
         # the connection (silent rate limit after rapid-fire calls).
         self._patch_request_timeout(30)
         self._apply_app_version()
+        self.PERMANENT_MEDIA = True
 
     @staticmethod
     def _challenge_code_handler(username: str, choice: Any = None) -> str:
@@ -1051,12 +1052,14 @@ class InstagramClient:
         ephemeral = False
         if item.item_type == "raven_media":
             visual = item.visual_media
-            # NOTE: DO NOT UNCOMMENT THIS
-            # if getattr(visual, "view_mode", None) != "permanent":
-            #     if ephemeral_folder is None:
-            #         msg = "view-once media is only downloaded into a temporary folder"
-            #         raise InstagramClientError(msg)
-            #     folder, ephemeral = ephemeral_folder, True
+            if (
+                getattr(visual, "view_mode", None) != "permanent"
+                and not self.PERMANENT_MEDIA
+            ):
+                if ephemeral_folder is None:
+                    msg = "view-once media is only downloaded into a temporary folder"
+                    raise InstagramClientError(msg)
+                folder, ephemeral = ephemeral_folder, True
             url = _visual_media_url(visual)
         else:
             media = item.media

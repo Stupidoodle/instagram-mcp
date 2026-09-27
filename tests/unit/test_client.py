@@ -817,6 +817,7 @@ class TestChannelClientMethods:
     def test_view_once_goes_to_the_ephemeral_folder_owner_only(
         self, instagram_client: InstagramClient, tmp_path: Path
     ) -> None:
+        instagram_client.PERMANENT_MEDIA = False
         instagram_client.client.direct_thread.return_value = MagicMock(
             messages=[_raven("9", "once")]
         )
@@ -856,6 +857,7 @@ class TestChannelClientMethods:
         messages: list[MagicMock],
         error: str,
     ) -> None:
+        instagram_client.PERMANENT_MEDIA = False
         instagram_client.client.direct_thread.return_value = MagicMock(messages=messages)
         with pytest.raises(InstagramClientError, match=error):
             instagram_client.download_message_media("1", "9", tmp_path)
