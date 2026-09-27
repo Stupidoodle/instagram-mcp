@@ -405,3 +405,16 @@ class TestSessionPush:
 def test_instructions_fit_claude_codes_limit() -> None:
     """Claude Code truncates server instructions past 2048 characters."""
     assert len(INSTRUCTIONS) <= 2048
+
+
+class TestActionLog:
+    def test_action_log_is_a_notice_not_their_turn(self) -> None:
+        channel, sent = _channel(idle_minutes=5)
+        channel.subscribe(T1, "alex")
+        channel.set_idle(T1, 60)
+        channel.handle(_msg(text="You missed a video chat", item_type="action_log"))
+        content, meta = sent[-1]
+        assert content == "You missed a video chat"
+        assert meta["event_type"] == "notice"
+        assert meta["user"] == "Alex"
+        assert channel._chats[T1].idle_override is not None

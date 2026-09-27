@@ -76,8 +76,8 @@ INCOMING EVENTS (subscribed chats only) arrive as <channel source="instagram" ch
   never pretend you saw it.
 - Edit / unsend / reaction: event_type="edit" | "unsend" | "reaction" with
   target_message_id; content is the new text (edit) or the emoji (reaction).
-- Read: event_type="read"; they saw your messages.
-- Typing: event_type="typing" or "typing_stopped".
+- Read / typing: event_type="read", "typing" or "typing_stopped".
+- Notice: event_type="notice" is a system line (missed call...), not their turn.
 - Idle: event_type="idle" minutes_idle="N" next_nudge_minutes="M" clock="<local time>";
   the chat has been quiet. Use the clock to judge the hour. Re-engage only if your
   rules say so. Nudges back off after 30 quiet minutes.
@@ -338,7 +338,7 @@ class Channel:
             isinstance(event, MessageEvent)
             and not event.edited
             and "is_from_me" not in meta
-            and meta.get("event_type") != "command"
+            and meta.get("event_type") not in {"command", "notice"}
         )
         with self._lock:
             chat.last_activity = time.monotonic()
@@ -392,6 +392,10 @@ class Channel:
         text = event.text or ""
         if event.timestamp:
             meta["ts"] = datetime.fromtimestamp(event.timestamp / 1_000_000, UTC).isoformat()
+
+        # A system line (missed call, theme change...), not something anyone said.
+        if event.item_type == "action_log":
+            return text or "[notice]", meta | {"event_type": "notice", "user": user}
 
         if from_me and not event.edited:
             kind = "text" if event.item_type == "text" else "media"
