@@ -41,6 +41,7 @@ from instagram_mcp.client import (
     InstagramClientError,
     SessionError,
     save_url,
+    share_downloads,
 )
 from instagram_mcp.config import get_settings, setup_logging
 from instagram_mcp.ephemeral import sweep
@@ -56,11 +57,11 @@ from instagram_mcp.mqtt.events import (
 )
 from instagram_mcp.mqtt.manager import MQTTManager
 from instagram_mcp.seen_log import SeenLog
-from instagram_mcp.video import VIDEO_SUFFIXES, frame_strip, has_audio, to_m4a
+from instagram_mcp.video import VIDEO_SUFFIXES, duration, frame_strip, has_audio, to_m4a
 
 if TYPE_CHECKING:
     import socket
-    from collections.abc import AsyncIterator, Sequence
+    from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
     from datetime import datetime
     from pathlib import Path
 
@@ -222,38 +223,47 @@ class Gateway:
                 event.thread_id, event.item_id, folder, ephemeral
             )
 
-    async def open_share(
-        self, thread_id: str, message_id: str, *, transcribe: bool
-    ) -> dict[str, Any]:
-        """Download a share, then a frame strip and the words of each video in it."""
+    async def open_share(self, thread_id: str, message_id: str) -> dict[str, Any]:
+        """Download a share; each video gets its length and a preview of its frames."""
         folder = self.settings.instagram_media_dir.resolve() / thread_id
         share, files = await run_in_threadpool(
             self.client.open_share, thread_id, message_id, folder
         )
-        frames, transcripts, errors = [], [], []
-        for video in (f for f in files if f.suffix.lower() in VIDEO_SUFFIXES):
-            try:
-                frames.append(str(await run_in_threadpool(frame_strip, video)))
-            except Exception as exc:
-                errors.append(f"frames of {video.name}: {exc}")
-            if not transcribe:
+        photos, videos, errors = [], [], []
+        for path in files:
+            if path.suffix.lower() not in VIDEO_SUFFIXES:
+                photos.append(str(path))
                 continue
+            video: dict[str, Any] = {"file": str(path)}
             try:
-                if await run_in_threadpool(has_audio, video):
-                    audio = await run_in_threadpool(to_m4a, video, video.parent)
-                    transcripts.append(await self._transcribe(audio))
+                video["seconds"] = round(await run_in_threadpool(duration, path), 1)
+                video["preview"] = str(await run_in_threadpool(frame_strip, path))
             except Exception as exc:
-                errors.append(f"transcript of {video.name}: {exc}")
-        opened: dict[str, Any] = {
-            "share": share.to_dict(),
-            "files": [str(f) for f in files],
-            "frames": frames,
-        }
-        if transcribe:
-            opened["transcripts"] = transcripts
-        if errors:
-            opened["errors"] = errors
-        return opened
+                errors.append(f"preview of {path.name}: {exc}")
+            videos.append(video)
+        opened: dict[str, Any] = {"share": share.to_dict(), "photos": photos, "videos": videos}
+        return opened | ({"errors": errors} if errors else {})
+
+    async def transcribe_share(self, thread_id: str, message_id: str) -> dict[str, Any]:
+        """What is said in a share's videos, reusing an open_share download."""
+        folder = self.settings.instagram_media_dir.resolve() / thread_id
+        files = share_downloads(folder, thread_id, message_id)
+        if not files:
+            _, files = await run_in_threadpool(
+                self.client.open_share, thread_id, message_id, folder
+            )
+        videos = [path for path in files if path.suffix.lower() in VIDEO_SUFFIXES]
+        if not videos:
+            msg = "this share has no video to transcribe"
+            raise InstagramClientError(msg)
+        transcripts = []
+        for path in videos:
+            if not await run_in_threadpool(has_audio, path):
+                transcripts.append({"file": str(path), "silent": True})
+                continue
+            audio = await run_in_threadpool(to_m4a, path, path.parent)
+            transcripts.append({"file": str(path), "text": await self._transcribe(audio)})
+        return {"transcripts": transcripts}
 
     def _describe_share(self, event: MessageEvent) -> MessageEvent:
         """A shared reel or post with its caption and cover (on a worker thread)."""
@@ -503,18 +513,27 @@ async def seen(request: Request) -> JSONResponse:
 
 
 async def open_share(request: Request) -> JSONResponse:
-    """Download a shared reel, post or story, with frames and (optionally) its words."""
+    """Download a shared reel, post or story, with a frame preview per video."""
+    return await _share_route(request, gw().open_share)
+
+
+async def transcribe_share(request: Request) -> JSONResponse:
+    """Transcribe the videos of a shared reel, post or story."""
+    return await _share_route(request, gw().transcribe_share)
+
+
+async def _share_route(
+    request: Request, action: Callable[[str, str], Awaitable[dict[str, Any]]]
+) -> JSONResponse:
     body = await _json(request)
     thread_id, message_id = body.get("thread_id"), body.get("message_id")
     if not thread_id or not message_id:
         return _err("thread_id and message_id required")
     try:
-        opened = await gw().open_share(
-            thread_id, message_id, transcribe=bool(body.get("transcribe", True))
-        )
+        result = await action(thread_id, message_id)
     except Exception as e:
         return _err(str(e), 502)
-    return JSONResponse({"success": True, **opened})
+    return JSONResponse({"success": True, **result})
 
 
 async def download(request: Request) -> JSONResponse:
@@ -690,6 +709,7 @@ def build_app() -> Starlette:
         Route("/typing", typing, methods=["POST"]),
         Route("/download", download, methods=["POST"]),
         Route("/open_share", open_share, methods=["POST"]),
+        Route("/transcribe_share", transcribe_share, methods=["POST"]),
         Route("/seen", seen),
         Route("/unsend", unsend, methods=["POST"]),
         Route("/threads", threads),

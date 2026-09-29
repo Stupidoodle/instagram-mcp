@@ -26,7 +26,7 @@ def to_m4a(source: Path, folder: Path) -> Path:
 def frame_strip(video: Path, *, frames: int = 6, columns: int = 3, width: int = 360) -> Path:
     """Evenly spaced frames of a video, tiled into one JPEG next to it."""
     rows = -(-frames // columns)
-    rate = frames / max(_duration(video), 0.1)
+    rate = frames / max(duration(video), 0.1)
     target = video.with_name(f"{video.stem}-frames.jpg")
     tiles = f"fps={rate:.6f},scale={width}:-2,tile={columns}x{rows}"
     _ffmpeg("-i", str(video), "-vf", tiles, "-frames:v", "1", "-q:v", "3", str(target))
@@ -38,7 +38,8 @@ def has_audio(video: Path) -> bool:
     return bool(_ffprobe(video, "-select_streams", "a", "-show_entries", "stream=index"))
 
 
-def _duration(video: Path) -> float:
+def duration(video: Path) -> float:
+    """Length of a video in seconds."""
     return float(_ffprobe(video, "-show_entries", "format=duration") or 0)
 
 

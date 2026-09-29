@@ -9,10 +9,12 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 import uvicorn
 
 from instagram_mcp import bridge
 from instagram_mcp.bridge import Gateway, _msg_json, _thread_json, event_stream, event_to_dict
+from instagram_mcp.client import InstagramClientError
 from instagram_mcp.mqtt.events import (
     Event,
     MessageEvent,
@@ -26,8 +28,6 @@ from instagram_mcp.shares import Share
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 class TestEventToDict:
@@ -230,39 +230,73 @@ class TestDescribeShare:
 
 
 class TestOpenShare:
-    async def test_frames_and_words_of_each_video(self, tmp_path: Path) -> None:
+    @staticmethod
+    def _gateway(tmp_path: Path, files: list[Path]) -> Gateway:
         g = _bare_gateway()
         g.settings = MagicMock(instagram_media_dir=tmp_path)
         g.client = MagicMock()
-        video, photo = tmp_path / "t1" / "v.mp4", tmp_path / "t1" / "p.jpg"
-        share = Share(kind="reel", caption="hi")
-        g.client.open_share.return_value = (share, [photo, video])
+        g.client.open_share.return_value = (Share(kind="reel", caption="hi"), files)
         g._transcribe = AsyncMock(return_value="hallo")  # type: ignore[method-assign]
+        return g
+
+    async def test_photos_and_a_preview_per_video(self, tmp_path: Path) -> None:
+        video, photo = tmp_path / "t1" / "v.mp4", tmp_path / "t1" / "p.jpg"
+        g = self._gateway(tmp_path, [photo, video])
         with (
+            patch("instagram_mcp.bridge.duration", return_value=7.04),
             patch("instagram_mcp.bridge.frame_strip", return_value=tmp_path / "f.jpg"),
-            patch("instagram_mcp.bridge.has_audio", return_value=True),
-            patch("instagram_mcp.bridge.to_m4a", return_value=tmp_path / "v.m4a") as audio,
         ):
-            opened = await g.open_share("t1", "m1", transcribe=True)
+            opened = await g.open_share("t1", "m1")
         g.client.open_share.assert_called_once_with("t1", "m1", tmp_path / "t1")
-        audio.assert_called_once_with(video, video.parent)
+        g._transcribe.assert_not_called()
         assert opened == {
             "share": {"kind": "reel", "caption": "hi"},
-            "files": [str(photo), str(video)],
-            "frames": [str(tmp_path / "f.jpg")],
-            "transcripts": ["hallo"],
+            "photos": [str(photo)],
+            "videos": [{"file": str(video), "seconds": 7.0, "preview": str(tmp_path / "f.jpg")}],
         }
 
-    async def test_failures_are_listed_and_transcripts_skippable(self, tmp_path: Path) -> None:
-        g = _bare_gateway()
-        g.settings = MagicMock(instagram_media_dir=tmp_path)
-        g.client = MagicMock()
-        g.client.open_share.return_value = (Share(kind="reel"), [tmp_path / "v.mp4"])
-        with patch("instagram_mcp.bridge.frame_strip", side_effect=RuntimeError("no ffmpeg")):
-            skipped = await g.open_share("t1", "m1", transcribe=False)
-            with patch("instagram_mcp.bridge.has_audio", side_effect=RuntimeError("probe")):
-                failed = await g.open_share("t1", "m1", transcribe=True)
-        assert skipped["errors"] == ["frames of v.mp4: no ffmpeg"]
-        assert "transcripts" not in skipped
-        assert failed["transcripts"] == []
-        assert failed["errors"][1] == "transcript of v.mp4: probe"
+    async def test_a_failed_preview_is_listed(self, tmp_path: Path) -> None:
+        g = self._gateway(tmp_path, [tmp_path / "v.mp4"])
+        with patch("instagram_mcp.bridge.duration", side_effect=RuntimeError("no ffprobe")):
+            opened = await g.open_share("t1", "m1")
+        assert opened["videos"] == [{"file": str(tmp_path / "v.mp4")}]
+        assert opened["errors"] == ["preview of v.mp4: no ffprobe"]
+
+
+class TestTranscribeShare:
+    async def test_reuses_the_download(self, tmp_path: Path) -> None:
+        g = TestOpenShare._gateway(tmp_path, [])
+        loud, mute = tmp_path / "t1" / "a.mp4", tmp_path / "t1" / "b.mp4"
+        with (
+            patch("instagram_mcp.bridge.share_downloads", return_value=[loud, mute]),
+            patch("instagram_mcp.bridge.has_audio", side_effect=[True, False]),
+            patch("instagram_mcp.bridge.to_m4a", return_value=tmp_path / "a.m4a") as audio,
+        ):
+            result = await g.transcribe_share("t1", "m1")
+        g.client.open_share.assert_not_called()
+        audio.assert_called_once_with(loud, loud.parent)
+        assert result == {
+            "transcripts": [
+                {"file": str(loud), "text": "hallo"},
+                {"file": str(mute), "silent": True},
+            ]
+        }
+
+    async def test_downloads_first_when_needed(self, tmp_path: Path) -> None:
+        g = TestOpenShare._gateway(tmp_path, [tmp_path / "v.mp4"])
+        with (
+            patch("instagram_mcp.bridge.share_downloads", return_value=[]),
+            patch("instagram_mcp.bridge.has_audio", return_value=True),
+            patch("instagram_mcp.bridge.to_m4a", return_value=tmp_path / "v.m4a"),
+        ):
+            result = await g.transcribe_share("t1", "m1")
+        g.client.open_share.assert_called_once()
+        assert result["transcripts"][0]["text"] == "hallo"
+
+    async def test_a_photo_post_has_nothing_to_transcribe(self, tmp_path: Path) -> None:
+        g = TestOpenShare._gateway(tmp_path, [tmp_path / "p.jpg"])
+        with (
+            patch("instagram_mcp.bridge.share_downloads", return_value=[]),
+            pytest.raises(InstagramClientError, match="no video"),
+        ):
+            await g.transcribe_share("t1", "m1")

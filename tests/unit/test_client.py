@@ -22,6 +22,7 @@ from instagram_mcp.client import (
     interactive_login,
     resolve_app_version,
     save_url,
+    share_downloads,
 )
 from instagram_mcp.models.schemas import MediaType
 from instagram_mcp.shares import Share
@@ -848,6 +849,14 @@ class TestChannelClientMethods:
         ]
         assert files == [tmp_path / "456789-9-1", tmp_path / "456789-9-2"]
         assert (share.kind, share.caption, share.media_id) == ("post", "two pics", "111")
+
+    def test_share_downloads_finds_the_parts_in_order(self, tmp_path: Path) -> None:
+        for name in ("456789-9-10.mp4", "456789-9-2.jpg", "456789-9-2-frames.jpg"):
+            (tmp_path / name).touch()
+        for name in ("456789-9-10.m4a", "456789-9-cover.jpg", "456789-8-1.mp4"):
+            (tmp_path / name).touch()
+        found = share_downloads(tmp_path, "123456789", "9")
+        assert [p.name for p in found] == ["456789-9-2.jpg", "456789-9-10.mp4"]
 
     def test_open_share_refuses_other_messages(
         self, instagram_client: InstagramClient, tmp_path: Path

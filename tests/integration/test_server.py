@@ -72,6 +72,7 @@ class TestServerIntegration:
             "mark_read",
             "download_attachment",
             "open_share",
+            "transcribe_share",
             "get_message_ids",
             "unsend",
             "react",

@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from instagram_mcp.video import FFmpegError, frame_strip, has_audio, to_m4a
+from instagram_mcp.video import FFmpegError, duration, frame_strip, has_audio, to_m4a
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -36,7 +36,9 @@ def _size(image: Path) -> str:
 
 @needs_ffmpeg
 def test_frame_strip_tiles_six_frames(tmp_path: Path) -> None:
-    strip = frame_strip(_video(tmp_path, "reel.mp4", sound=False))
+    video = _video(tmp_path, "reel.mp4", sound=False)
+    assert duration(video) == pytest.approx(2.0, abs=0.1)
+    strip = frame_strip(video)
     assert strip == tmp_path / "reel-frames.jpg"
     assert _size(strip).strip() == "1080,1280"  # 3x2 tiles, each 360 wide
 

@@ -232,21 +232,40 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
             return {"success": False, "error": str(e)}
 
     @mcp.tool()
-    def open_share(
-        message_id: str, to: str | None = None, transcribe: bool = True
-    ) -> dict[str, Any]:
-        """Open a shared reel, post or story: download it to see and hear what's in it.
+    def open_share(message_id: str, to: str | None = None) -> dict[str, Any]:
+        """Open a shared reel, post or story: download it and see what's in it.
 
-        Returns the caption, the downloaded photos/videos, one frame-strip image per
-        video (Read it to see what happens) and what is said in it.
+        Returns the caption, the photos, and per video its file, length in seconds and
+        a preview: 6 evenly spaced frames stitched into one image, left to right, top
+        to bottom. Read the preview first. For a closer look, pull frames yourself:
+        `ffmpeg -loglevel error -ss <second> -i <file> -frames:v 1 /tmp/f.jpg` (one
+        frame) or `-vf fps=2 /tmp/f-%02d.jpg` (every half second), then Read them.
+        For what is said, call transcribe_share.
 
         Args:
             message_id: Message id of the share, from the channel event.
             to: Chat alias. Omit for the sole subscribed target.
-            transcribe: Transcribe the audio too; False for music-only reels.
         """
         try:
-            return bridge.open_share(target(to), message_id, transcribe=transcribe)
+            return bridge.open_share(target(to), message_id)
+        except ChannelError as e:
+            return _refused(e)
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @mcp.tool()
+    def transcribe_share(message_id: str, to: str | None = None) -> dict[str, Any]:
+        """Transcribe what is said in a shared reel's (or post's) videos.
+
+        Only when the words matter: music-only reels give noise. Reuses the open_share
+        download.
+
+        Args:
+            message_id: Message id of the share, from the channel event.
+            to: Chat alias. Omit for the sole subscribed target.
+        """
+        try:
+            return bridge.transcribe_share(target(to), message_id)
         except ChannelError as e:
             return _refused(e)
         except Exception as e:

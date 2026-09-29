@@ -148,12 +148,14 @@ class TestBridgeClient:
             seen["req"] = request
             return httpx2.Response(200, json={"success": True, "frames": []})
 
-        assert _client(handler).open_share("t1", "m1", transcribe=False)["success"] is True
-        req = seen["req"]
-        assert req.url.path == "/open_share"
-        body = {"thread_id": "t1", "message_id": "m1", "transcribe": False}
-        assert json.loads(req.content) == body
-        assert req.extensions["timeout"]["read"] == 360
+        bridge = _client(handler)
+        assert bridge.open_share("t1", "m1")["success"] is True
+        assert seen["req"].url.path == "/open_share"
+        assert json.loads(seen["req"].content) == {"thread_id": "t1", "message_id": "m1"}
+        assert seen["req"].extensions["timeout"]["read"] == 180
+        assert bridge.transcribe_share("t1", "m1")["success"] is True
+        assert seen["req"].url.path == "/transcribe_share"
+        assert seen["req"].extensions["timeout"]["read"] == 360
 
     def test_react_post_body(self) -> None:
         seen: dict[str, httpx2.Request] = {}

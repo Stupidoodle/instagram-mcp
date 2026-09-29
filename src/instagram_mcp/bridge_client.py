@@ -181,12 +181,15 @@ class BridgeClient:
         """Download a message's media; returns `{success, path}`."""
         return self._post("/download", {"thread_id": thread_id, "message_id": message_id})
 
-    def open_share(
-        self, thread_id: str, message_id: str, *, transcribe: bool = True
-    ) -> dict[str, Any]:
-        """Download a shared reel/post/story; `{success, share, files, frames, transcripts}`."""
-        body = {"thread_id": thread_id, "message_id": message_id, "transcribe": transcribe}
-        return self._post("/open_share", body, timeout=360)
+    def open_share(self, thread_id: str, message_id: str) -> dict[str, Any]:
+        """Download a shared reel/post/story; `{success, share, photos, videos}`."""
+        body = {"thread_id": thread_id, "message_id": message_id}
+        return self._post("/open_share", body, timeout=180)
+
+    def transcribe_share(self, thread_id: str, message_id: str) -> dict[str, Any]:
+        """Transcribe a shared reel/post/story's videos; `{success, transcripts}`."""
+        body = {"thread_id": thread_id, "message_id": message_id}
+        return self._post("/transcribe_share", body, timeout=360)
 
     def unsend(self, thread_id: str, message_id: str) -> dict[str, Any]:
         """Unsend (delete for everyone) one of our own messages."""

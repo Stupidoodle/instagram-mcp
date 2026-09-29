@@ -852,7 +852,7 @@ class InstagramClient:
         for number, part in enumerate(media.resources or [media], start=1):
             url = part.video_url or part.thumbnail_url
             if url:
-                files.append(save_url(str(url), folder, f"{thread_id[-6:]}-{message_id}-{number}"))
+                files.append(save_url(str(url), folder, _share_stem(thread_id, message_id, number)))
         return _with_media(share, media), files
 
     def _find_message(self, thread_id: str, message_id: str) -> IGDirectMessage:
@@ -1087,6 +1087,17 @@ def _with_media(share: Share, media: Any) -> Share:
         caption=share.caption or media.caption_text or None,
         author=share.author or getattr(user, "username", None),
     )
+
+
+def _share_stem(thread_id: str, message_id: str, number: int | str) -> str:
+    return f"{thread_id[-6:]}-{message_id}-{number}"
+
+
+def share_downloads(folder: Path, thread_id: str, message_id: str) -> list[Path]:
+    """The photos and videos open_share already saved for a message, in order."""
+    found = folder.glob(f"{_share_stem(thread_id, message_id, '*')}.*")
+    parts = [p for p in found if p.stem.rpartition("-")[2].isdigit() and p.suffix != ".m4a"]
+    return sorted(parts, key=lambda path: int(path.stem.rpartition("-")[2]))
 
 
 def save_url(url: str, folder: Path, stem: str) -> Path:
