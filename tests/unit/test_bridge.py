@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from dataclasses import replace
 from datetime import datetime
 from types import SimpleNamespace
 from typing import TYPE_CHECKING
@@ -24,6 +25,8 @@ from instagram_mcp.mqtt.events import (
 from instagram_mcp.shares import Share
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import pytest
 
 
@@ -194,3 +197,33 @@ class TestShutdown:
             await server.shutdown()
         g.close_streams.assert_called_once_with()
         base.assert_awaited_once()
+
+
+class TestDescribeShare:
+    def _gateway(self, tmp_path: Path) -> Gateway:
+        g = _bare_gateway()
+        g.settings = MagicMock(instagram_media_dir=tmp_path)
+        g.client = MagicMock()
+        return g
+
+    def test_caption_and_cover(self, tmp_path: Path) -> None:
+        g = self._gateway(tmp_path)
+        share = Share(kind="reel", media_id="1", preview_url="https://cdn/c.jpg")
+        g.client.share_details.return_value = replace(share, caption="so good")
+        event = MessageEvent("thread42", "i9", 5, None, "xma_clip", 1, share=share)
+        with patch("instagram_mcp.bridge.save_url", return_value=tmp_path / "c.jpg") as save:
+            out = g._describe_share(event)
+        save.assert_called_once_with("https://cdn/c.jpg", tmp_path / "thread42", "read42-i9-cover")
+        assert out.share is not None and out.share.caption == "so good"
+        assert (out.media_path, out.media_error) == (str(tmp_path / "c.jpg"), None)
+
+    def test_failures_are_reported_not_raised(self, tmp_path: Path) -> None:
+        g = self._gateway(tmp_path)
+        share = Share(kind="reel", media_id="1", preview_url="https://cdn/c.jpg")
+        g.client.share_details.side_effect = RuntimeError("gone")
+        event = MessageEvent("t1", "i9", 5, None, "xma_clip", 1, share=share)
+        with patch("instagram_mcp.bridge.save_url", side_effect=RuntimeError("404")):
+            out = g._describe_share(event)
+        assert out.share == share
+        assert out.media_path is None
+        assert out.media_error == "caption lookup failed: gone; cover download failed: 404"

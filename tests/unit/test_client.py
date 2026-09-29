@@ -21,8 +21,10 @@ from instagram_mcp.client import (
     _determine_media_type,
     interactive_login,
     resolve_app_version,
+    save_url,
 )
 from instagram_mcp.models.schemas import MediaType
+from instagram_mcp.shares import Share
 
 
 class TestConvertUser:
@@ -804,6 +806,27 @@ class TestChannelClientMethods:
         instagram_client.client.direct_message_seen.return_value = True
         assert instagram_client.mark_seen("111", "222") is True
         instagram_client.client.direct_message_seen.assert_called_once_with(111, 222)
+
+    def test_share_details_fill_the_caption(self, instagram_client: InstagramClient) -> None:
+        media = MagicMock(caption_text="so good", user=MagicMock(username="poster"))
+        instagram_client.client.media_info_v1.return_value = media
+        reel = Share(kind="reel", media_id="111")
+        assert instagram_client.share_details(reel) == Share(
+            kind="reel", media_id="111", caption="so good", author="poster"
+        )
+        instagram_client.client.media_info_v1.assert_called_once_with("111")
+
+    def test_share_details_skip_what_has_no_media(self, instagram_client: InstagramClient) -> None:
+        for share in (Share(kind="reel"), Share(kind="profile", media_id="1")):
+            assert instagram_client.share_details(share) is share
+        instagram_client.client.media_info_v1.assert_not_called()
+
+    def test_save_url(self, tmp_path: Path) -> None:
+        response = MagicMock(content=b"jpeg", headers={"content-type": "image/jpeg"})
+        with patch("instagram_mcp.client.httpx2.get", return_value=response):
+            path = save_url("https://cdn/c", tmp_path / "new", "cover")
+        assert path == tmp_path / "new" / "cover.jpg"
+        assert path.read_bytes() == b"jpeg"
 
     def test_download_message_media(
         self, instagram_client: InstagramClient, tmp_path: Path

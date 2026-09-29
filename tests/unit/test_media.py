@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from pathlib import Path
 
 from instagram_mcp.media import InboundMedia
 from instagram_mcp.mqtt.events import Event, MessageEvent
+from instagram_mcp.shares import Share
 
 ME = "1000"
 
@@ -33,6 +35,7 @@ class Harness:
             self_user_id=ME,
             download=self._download,
             transcribe=self._transcribe,
+            describe_share=self._describe_share,
             deliver=self.delivered.append,
         )
 
@@ -46,6 +49,12 @@ class Harness:
             raise self._download_error
         suffix = ".m4a" if event.item_type == "voice_media" else ".jpg"
         return Path(f"/media/{event.thread_id}/{event.item_id}{suffix}")
+
+    def _describe_share(self, event: MessageEvent) -> MessageEvent:
+        self.downloads.append(event.item_id)
+        if self._download_error is not None:
+            raise self._download_error
+        return dataclasses.replace(event, media_path=f"/media/{event.item_id}-cover.jpg")
 
     async def _transcribe(self, path: Path) -> str:
         self.transcribed.append(path)
@@ -128,3 +137,26 @@ async def test_chat_order_holds_and_other_chats_are_not_blocked() -> None:
     assert [e.item_id for e in h.delivered if isinstance(e, MessageEvent)] == ["c"]
     await h.media.drain()
     assert [e.item_id for e in h.delivered if isinstance(e, MessageEvent)] == ["c", "a", "b"]
+
+
+async def test_a_share_from_either_side_is_described_first() -> None:
+    h = Harness()
+    reel = Share(kind="reel", media_id="111")
+    theirs = dataclasses.replace(_msg("xma_clip", item_id="theirs"), share=reel)
+    mine = dataclasses.replace(_msg("xma_clip", item_id="mine", user=int(ME)), share=reel)
+    await _run(h, theirs, mine)
+    assert h.downloads == ["theirs", "mine"]
+    assert [e.media_path for e in h.delivered if isinstance(e, MessageEvent)] == [
+        "/media/theirs-cover.jpg",
+        "/media/mine-cover.jpg",
+    ]
+
+
+async def test_a_failed_share_lookup_still_delivers() -> None:
+    h = Harness(download_error=RuntimeError("media gone"))
+    share = dataclasses.replace(_msg("xma_clip"), share=Share(kind="reel"))
+    await _run(h, share)
+    (event,) = h.delivered
+    assert isinstance(event, MessageEvent)
+    assert event.share == Share(kind="reel")
+    assert event.media_error == "share lookup failed: media gone"

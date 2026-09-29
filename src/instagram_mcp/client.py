@@ -4,6 +4,7 @@ This module provides a wrapper around instagrapi's Client class with
 session persistence and proper error handling for MCP server usage.
 """
 
+import dataclasses
 import json
 import logging
 import shutil
@@ -37,7 +38,7 @@ from instagram_mcp.models.schemas import (
     ThreadUser,
 )
 from instagram_mcp.raven import ViewMode, send_disappearing
-from instagram_mcp.shares import share_from_message
+from instagram_mcp.shares import Share, share_from_message
 
 if TYPE_CHECKING:
     from instagrapi.types import DirectMessage as IGDirectMessage
@@ -812,6 +813,27 @@ class InstagramClient:
             )
         )
 
+    def share_details(self, share: Share) -> Share:
+        """Fill in a share's caption and author from its media (one API call).
+
+        Share cards come without the caption. Profiles and link cards have no media.
+
+        Args:
+            share: A share from a message.
+
+        Returns:
+            Share: The same share with caption and author filled in where known.
+        """
+        if not share.media_id or share.kind in {"profile", "card"}:
+            return share
+        media = self._retry_on_rate_limit(self.client.media_info_v1, share.media_id)
+        user = getattr(media, "user", None)
+        return dataclasses.replace(
+            share,
+            caption=share.caption or media.caption_text or None,
+            author=share.author or getattr(user, "username", None),
+        )
+
     def download_message_media(
         self,
         thread_id: str,
@@ -863,12 +885,7 @@ class InstagramClient:
         if not url:
             msg = f"message {message_id} ({item.item_type}) has no downloadable media"
             raise InstagramClientError(msg)
-        response = httpx2.get(str(url), timeout=60, follow_redirects=True)
-        response.raise_for_status()
-        suffix = _suffix_for(response.headers.get("content-type", ""), str(url))
-        folder.mkdir(parents=True, exist_ok=True)
-        path = folder / f"{thread_id[-6:]}-{message_id}{suffix}"
-        path.write_bytes(response.content)
+        path = save_url(str(url), folder, f"{thread_id[-6:]}-{message_id}")
         if ephemeral:
             folder.chmod(0o700)
             path.chmod(0o600)
@@ -1034,6 +1051,16 @@ _SUFFIXES = {
     "audio/mpeg": ".mp3",
     "audio/ogg": ".ogg",
 }
+
+
+def save_url(url: str, folder: Path, stem: str) -> Path:
+    """Download a URL to ``folder/stem`` plus the suffix its content type implies."""
+    response = httpx2.get(url, timeout=60, follow_redirects=True)
+    response.raise_for_status()
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{stem}{_suffix_for(response.headers.get('content-type', ''), url)}"
+    path.write_bytes(response.content)
+    return path
 
 
 def _suffix_for(content_type: str, url: str) -> str:

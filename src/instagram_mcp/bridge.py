@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import json
 import logging
 import sys
@@ -39,6 +40,7 @@ from instagram_mcp.client import (
     InstagramClient,
     InstagramClientError,
     SessionError,
+    save_url,
 )
 from instagram_mcp.config import get_settings, setup_logging
 from instagram_mcp.ephemeral import sweep
@@ -157,6 +159,7 @@ class Gateway:
             self_user_id=self.self_user_id,
             download=self._download_media,
             transcribe=self._transcribe,
+            describe_share=self._describe_share,
             deliver=self._deliver,
         )
         self._sweeper = self._loop.create_task(self._sweep_ephemeral())
@@ -217,6 +220,26 @@ class Gateway:
             return self.client.download_message_media(
                 event.thread_id, event.item_id, folder, ephemeral
             )
+
+    def _describe_share(self, event: MessageEvent) -> MessageEvent:
+        """A shared reel or post with its caption and cover (on a worker thread)."""
+        share, errors = event.share, []
+        assert share is not None
+        try:
+            share = self.client.share_details(share)
+        except Exception as exc:
+            errors.append(f"caption lookup failed: {exc}")
+        cover = None
+        if share.preview_url:
+            folder = self.settings.instagram_media_dir.resolve() / event.thread_id
+            stem = f"{event.thread_id[-6:]}-{event.item_id}-cover"
+            try:
+                cover = str(save_url(share.preview_url, folder, stem))
+            except Exception as exc:
+                errors.append(f"cover download failed: {exc}")
+        return dataclasses.replace(
+            event, share=share, media_path=cover, media_error="; ".join(errors) or None
+        )
 
     async def _sweep_ephemeral(self) -> None:
         """Delete view-once and replayable downloads once their time is up."""

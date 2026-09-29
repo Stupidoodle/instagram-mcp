@@ -2,8 +2,9 @@
 
 A persona should never answer a photo or voice note it hasn't seen or heard, so the
 event for inbound media is held until the file is on disk and, for voice, the
-transcript is back. Events are delivered in per-chat order; a slow download only
-holds up its own chat.
+transcript is back. A shared reel or post, from either side, is held until its
+caption and cover are in. Events are delivered in per-chat order; a slow download
+only holds up its own chat.
 """
 
 from __future__ import annotations
@@ -37,12 +38,14 @@ class InboundMedia:
         self_user_id: str,
         download: Callable[[MessageEvent], Path],
         transcribe: Callable[[Path], Awaitable[str]],
+        describe_share: Callable[[MessageEvent], MessageEvent],
         deliver: Callable[[Event], None],
         timeout: float = 150.0,
     ) -> None:
         self.self_user_id = self_user_id
         self._download = download
         self._transcribe = transcribe
+        self._describe_share = describe_share
         self._deliver = deliver
         self._timeout = timeout
         self._chains: dict[str, asyncio.Task[None]] = {}
@@ -69,6 +72,8 @@ class InboundMedia:
         if self._needs_media(event):
             assert isinstance(event, MessageEvent)
             event = await self._enrich(event)
+        elif isinstance(event, MessageEvent) and event.share is not None and not event.edited:
+            event = await self._share(event)
         self._deliver(event)
 
     def _needs_media(self, event: Event) -> bool:
@@ -78,6 +83,15 @@ class InboundMedia:
             and event.item_type in MEDIA_ITEM_TYPES
             and str(event.user_id) != self.self_user_id
         )
+
+    async def _share(self, event: MessageEvent) -> MessageEvent:
+        try:
+            return await asyncio.wait_for(
+                run_in_threadpool(self._describe_share, event), timeout=self._timeout
+            )
+        except Exception as exc:
+            logger.warning("Share lookup failed for %s: %s", event.item_id, exc)
+            return dataclasses.replace(event, media_error=f"share lookup failed: {exc}")
 
     async def _enrich(self, event: MessageEvent) -> MessageEvent:
         try:
