@@ -132,6 +132,14 @@ class TestMessagingTools:
         self.bridge.download.side_effect = RuntimeError("view-once")
         assert self._tool("download_attachment")(message_id="m")["error"] == "view-once"
 
+    def test_open_share(self) -> None:
+        self.bridge.open_share.return_value = {"success": True, "frames": ["/m/f.jpg"]}
+        assert self._tool("open_share")(message_id="m")["frames"] == ["/m/f.jpg"]
+        self.bridge.open_share.assert_called_once_with(T1, "m", transcribe=True)
+        assert "refused" in self._tool("open_share")(message_id="m", to="nope")["error"]
+        self.bridge.open_share.side_effect = RuntimeError("gone")
+        assert self._tool("open_share")(message_id="m")["error"] == "gone"
+
     def test_get_message_ids(self) -> None:
         self.bridge.messages.return_value = [
             {

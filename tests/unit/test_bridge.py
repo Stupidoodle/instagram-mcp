@@ -227,3 +227,42 @@ class TestDescribeShare:
         assert out.share == share
         assert out.media_path is None
         assert out.media_error == "caption lookup failed: gone; cover download failed: 404"
+
+
+class TestOpenShare:
+    async def test_frames_and_words_of_each_video(self, tmp_path: Path) -> None:
+        g = _bare_gateway()
+        g.settings = MagicMock(instagram_media_dir=tmp_path)
+        g.client = MagicMock()
+        video, photo = tmp_path / "t1" / "v.mp4", tmp_path / "t1" / "p.jpg"
+        share = Share(kind="reel", caption="hi")
+        g.client.open_share.return_value = (share, [photo, video])
+        g._transcribe = AsyncMock(return_value="hallo")  # type: ignore[method-assign]
+        with (
+            patch("instagram_mcp.bridge.frame_strip", return_value=tmp_path / "f.jpg"),
+            patch("instagram_mcp.bridge.has_audio", return_value=True),
+            patch("instagram_mcp.bridge.to_m4a", return_value=tmp_path / "v.m4a") as audio,
+        ):
+            opened = await g.open_share("t1", "m1", transcribe=True)
+        g.client.open_share.assert_called_once_with("t1", "m1", tmp_path / "t1")
+        audio.assert_called_once_with(video, video.parent)
+        assert opened == {
+            "share": {"kind": "reel", "caption": "hi"},
+            "files": [str(photo), str(video)],
+            "frames": [str(tmp_path / "f.jpg")],
+            "transcripts": ["hallo"],
+        }
+
+    async def test_failures_are_listed_and_transcripts_skippable(self, tmp_path: Path) -> None:
+        g = _bare_gateway()
+        g.settings = MagicMock(instagram_media_dir=tmp_path)
+        g.client = MagicMock()
+        g.client.open_share.return_value = (Share(kind="reel"), [tmp_path / "v.mp4"])
+        with patch("instagram_mcp.bridge.frame_strip", side_effect=RuntimeError("no ffmpeg")):
+            skipped = await g.open_share("t1", "m1", transcribe=False)
+            with patch("instagram_mcp.bridge.has_audio", side_effect=RuntimeError("probe")):
+                failed = await g.open_share("t1", "m1", transcribe=True)
+        assert skipped["errors"] == ["frames of v.mp4: no ffmpeg"]
+        assert "transcripts" not in skipped
+        assert failed["transcripts"] == []
+        assert failed["errors"][1] == "transcript of v.mp4: probe"

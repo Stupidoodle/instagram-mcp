@@ -19,13 +19,14 @@ from typing import TYPE_CHECKING, Any, Literal
 import httpx2
 from instagrapi.image_util import prepare_image
 
+from instagram_mcp.video import VIDEO_SUFFIXES
+
 if TYPE_CHECKING:
     from pathlib import Path
 
     from instagrapi import Client
 
 ViewMode = Literal["once", "replayable"]
-VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".m4v"})
 _HEADER_MODE = {"once": "0", "replayable": "1"}  # "permanent" is "2"
 _RUPLOAD = "https://rupload.facebook.com"
 _DEVICE = {

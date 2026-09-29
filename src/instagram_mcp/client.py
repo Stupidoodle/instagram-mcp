@@ -7,8 +7,6 @@ session persistence and proper error handling for MCP server usage.
 import dataclasses
 import json
 import logging
-import shutil
-import subprocess
 import sys
 import tempfile
 import time
@@ -39,6 +37,7 @@ from instagram_mcp.models.schemas import (
 )
 from instagram_mcp.raven import ViewMode, send_disappearing
 from instagram_mcp.shares import Share, share_from_message
+from instagram_mcp.video import to_m4a
 
 if TYPE_CHECKING:
     from instagrapi.types import DirectMessage as IGDirectMessage
@@ -827,12 +826,45 @@ class InstagramClient:
         if not share.media_id or share.kind in {"profile", "card"}:
             return share
         media = self._retry_on_rate_limit(self.client.media_info_v1, share.media_id)
-        user = getattr(media, "user", None)
-        return dataclasses.replace(
-            share,
-            caption=share.caption or media.caption_text or None,
-            author=share.author or getattr(user, "username", None),
+        return _with_media(share, media)
+
+    def open_share(self, thread_id: str, message_id: str, folder: Path) -> tuple[Share, list[Path]]:
+        """Download everything in a shared reel, post or story.
+
+        Args:
+            thread_id: ID of the thread.
+            message_id: ID of the message with the share.
+            folder: Where to save the files.
+
+        Returns:
+            The share with its caption, and the downloaded photos and videos in order.
+
+        Raises:
+            InstagramClientError: If the message isn't a share of a reel, post or story.
+        """
+        item = self._find_message(thread_id, message_id)
+        share = share_from_message(item)
+        if share is None or not share.media_id:
+            msg = f"message {message_id} ({item.item_type}) isn't a shared reel, post or story"
+            raise InstagramClientError(msg)
+        media = self._retry_on_rate_limit(self.client.media_info_v1, share.media_id)
+        files = []
+        for number, part in enumerate(media.resources or [media], start=1):
+            url = part.video_url or part.thumbnail_url
+            if url:
+                files.append(save_url(str(url), folder, f"{thread_id[-6:]}-{message_id}-{number}"))
+        return _with_media(share, media), files
+
+    def _find_message(self, thread_id: str, message_id: str) -> IGDirectMessage:
+        """A message among the latest 50 of its thread."""
+        thread = self._retry_on_rate_limit(
+            self.client.direct_thread, thread_id=int(thread_id), amount=50
         )
+        item = next((m for m in thread.messages or [] if str(m.id) == message_id), None)
+        if item is None:
+            msg = f"message {message_id} not in the latest 50 of this thread"
+            raise InstagramClientError(msg)
+        return item
 
     def download_message_media(
         self,
@@ -860,13 +892,7 @@ class InstagramClient:
             InstagramClientError: If the message isn't found, is view-once without an
                 ephemeral folder, or has no media.
         """
-        thread = self._retry_on_rate_limit(
-            self.client.direct_thread, thread_id=int(thread_id), amount=50
-        )
-        item = next((m for m in thread.messages or [] if str(m.id) == message_id), None)
-        if item is None:
-            msg = f"message {message_id} not in the latest 50 of this thread"
-            raise InstagramClientError(msg)
+        item = self._find_message(thread_id, message_id)
         ephemeral = False
         if item.item_type == "raven_media":
             visual = item.visual_media
@@ -905,7 +931,7 @@ class InstagramClient:
             DirectMessage: The sent message, or None if failed.
         """
         with tempfile.TemporaryDirectory() as tmp:
-            clip = path if path.suffix.lower() == ".m4a" else _to_m4a(path, Path(tmp))
+            clip = path if path.suffix.lower() == ".m4a" else to_m4a(path, Path(tmp))
             result = self.client.direct_send_voice(path=clip, thread_ids=[int(thread_id)])
         if result:
             return _convert_message(result, thread_id)
@@ -1053,6 +1079,16 @@ _SUFFIXES = {
 }
 
 
+def _with_media(share: Share, media: Any) -> Share:
+    """A share with the caption and author its media reports, where it lacked them."""
+    user = getattr(media, "user", None)
+    return dataclasses.replace(
+        share,
+        caption=share.caption or media.caption_text or None,
+        author=share.author or getattr(user, "username", None),
+    )
+
+
 def save_url(url: str, folder: Path, stem: str) -> Path:
     """Download a URL to ``folder/stem`` plus the suffix its content type implies."""
     response = httpx2.get(url, timeout=60, follow_redirects=True)
@@ -1094,20 +1130,6 @@ def _visual_media_url(visual: Any) -> str | None:
     if images and images.candidates:
         return str(images.candidates[0].url)
     return None
-
-
-def _to_m4a(source: Path, folder: Path) -> Path:
-    """Convert an audio file to AAC in an MP4 container with ffmpeg."""
-    ffmpeg = shutil.which("ffmpeg")
-    if ffmpeg is None:
-        msg = "ffmpeg is needed to convert voice messages to .m4a"
-        raise InstagramClientError(msg)
-    target = folder / f"{source.stem}.m4a"
-    argv = [ffmpeg, "-y", "-loglevel", "error", "-i", str(source)]
-    argv += ["-c:a", "aac", "-b:a", "64k", str(target)]
-    subprocess.run(argv, check=True, capture_output=True)  # noqa: S603 - fixed argv, file paths
-
-    return target
 
 
 def interactive_login() -> None:

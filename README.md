@@ -15,6 +15,7 @@ events. Nothing polls. The channel tools use the same names as the WhatsApp chan
 - `send_typing` / `mark_read` - Typing indicator / "Seen"
 - `react` / `unsend` / `get_message_ids` - React, take back your own messages
 - `download_attachment` - Fetch a photo, video or voice clip (view-once media only to a temporary folder)
+- `open_share` - Open a shared reel, post or story: its files, a frame strip per video and what is said
 - `set_idle` - Tune the idle-nudge cadence per chat
 
 **Reading**
@@ -24,6 +25,12 @@ events. Nothing polls. The channel tools use the same names as the WhatsApp chan
 **Inbox and sharing**
 - `hide_thread` / `mark_thread_unread` / `mute_thread` / `unmute_thread`
 - `share_media` / `share_profile`
+
+### Shared reels, posts and stories
+
+A share arrives as `[reel by @author: caption — link]` with its cover image in
+`media_path`, whoever sent it. The caption costs one API call per share; the video is
+only downloaded (and transcribed) when a persona calls `open_share`.
 
 ### Idle nudges
 

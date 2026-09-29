@@ -56,6 +56,7 @@ from instagram_mcp.mqtt.events import (
 )
 from instagram_mcp.mqtt.manager import MQTTManager
 from instagram_mcp.seen_log import SeenLog
+from instagram_mcp.video import VIDEO_SUFFIXES, frame_strip, has_audio, to_m4a
 
 if TYPE_CHECKING:
     import socket
@@ -220,6 +221,39 @@ class Gateway:
             return self.client.download_message_media(
                 event.thread_id, event.item_id, folder, ephemeral
             )
+
+    async def open_share(
+        self, thread_id: str, message_id: str, *, transcribe: bool
+    ) -> dict[str, Any]:
+        """Download a share, then a frame strip and the words of each video in it."""
+        folder = self.settings.instagram_media_dir.resolve() / thread_id
+        share, files = await run_in_threadpool(
+            self.client.open_share, thread_id, message_id, folder
+        )
+        frames, transcripts, errors = [], [], []
+        for video in (f for f in files if f.suffix.lower() in VIDEO_SUFFIXES):
+            try:
+                frames.append(str(await run_in_threadpool(frame_strip, video)))
+            except Exception as exc:
+                errors.append(f"frames of {video.name}: {exc}")
+            if not transcribe:
+                continue
+            try:
+                if await run_in_threadpool(has_audio, video):
+                    audio = await run_in_threadpool(to_m4a, video, video.parent)
+                    transcripts.append(await self._transcribe(audio))
+            except Exception as exc:
+                errors.append(f"transcript of {video.name}: {exc}")
+        opened: dict[str, Any] = {
+            "share": share.to_dict(),
+            "files": [str(f) for f in files],
+            "frames": frames,
+        }
+        if transcribe:
+            opened["transcripts"] = transcripts
+        if errors:
+            opened["errors"] = errors
+        return opened
 
     def _describe_share(self, event: MessageEvent) -> MessageEvent:
         """A shared reel or post with its caption and cover (on a worker thread)."""
@@ -468,6 +502,21 @@ async def seen(request: Request) -> JSONResponse:
     return JSONResponse({"thread_id": thread_id, "seen": rows})
 
 
+async def open_share(request: Request) -> JSONResponse:
+    """Download a shared reel, post or story, with frames and (optionally) its words."""
+    body = await _json(request)
+    thread_id, message_id = body.get("thread_id"), body.get("message_id")
+    if not thread_id or not message_id:
+        return _err("thread_id and message_id required")
+    try:
+        opened = await gw().open_share(
+            thread_id, message_id, transcribe=bool(body.get("transcribe", True))
+        )
+    except Exception as e:
+        return _err(str(e), 502)
+    return JSONResponse({"success": True, **opened})
+
+
 async def download(request: Request) -> JSONResponse:
     """Download a message's media and return the local path."""
     body = await _json(request)
@@ -640,6 +689,7 @@ def build_app() -> Starlette:
         Route("/mark_read", mark_read, methods=["POST"]),
         Route("/typing", typing, methods=["POST"]),
         Route("/download", download, methods=["POST"]),
+        Route("/open_share", open_share, methods=["POST"]),
         Route("/seen", seen),
         Route("/unsend", unsend, methods=["POST"]),
         Route("/threads", threads),

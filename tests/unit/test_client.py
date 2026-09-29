@@ -25,6 +25,7 @@ from instagram_mcp.client import (
 )
 from instagram_mcp.models.schemas import MediaType
 from instagram_mcp.shares import Share
+from instagram_mcp.video import FFmpegError
 
 
 class TestConvertUser:
@@ -821,6 +822,41 @@ class TestChannelClientMethods:
             assert instagram_client.share_details(share) is share
         instagram_client.client.media_info_v1.assert_not_called()
 
+    def test_open_share_downloads_every_part(
+        self, instagram_client: InstagramClient, tmp_path: Path
+    ) -> None:
+        card = {"header_title_text": "poster", "target_url": "https://www.instagram.com/p/A/"}
+        item = MagicMock(id="9", item_type="xma_media_share", raw_xma={"xma_media_share": [card]})
+        item.raw_xma["xma_media_share"][0]["serialized_content_ref"] = (
+            '{"fetch_params": {"media_igid": "111"}}'
+        )
+        instagram_client.client.direct_thread.return_value = MagicMock(messages=[item])
+        media = MagicMock(
+            caption_text="two pics",
+            user=MagicMock(username="poster"),
+            resources=[
+                MagicMock(video_url=None, thumbnail_url="https://cdn/1.jpg"),
+                MagicMock(video_url="https://cdn/2.mp4", thumbnail_url="https://cdn/2.jpg"),
+            ],
+        )
+        instagram_client.client.media_info_v1.return_value = media
+        with patch("instagram_mcp.client.save_url", side_effect=lambda _url, f, s: f / s) as save:
+            share, files = instagram_client.open_share("123456789", "9", tmp_path)
+        assert [c.args[0] for c in save.call_args_list] == [
+            "https://cdn/1.jpg",
+            "https://cdn/2.mp4",
+        ]
+        assert files == [tmp_path / "456789-9-1", tmp_path / "456789-9-2"]
+        assert (share.kind, share.caption, share.media_id) == ("post", "two pics", "111")
+
+    def test_open_share_refuses_other_messages(
+        self, instagram_client: InstagramClient, tmp_path: Path
+    ) -> None:
+        item = MagicMock(id="9", item_type="text", raw_xma=None)
+        instagram_client.client.direct_thread.return_value = MagicMock(messages=[item])
+        with pytest.raises(InstagramClientError, match="isn't a shared reel"):
+            instagram_client.open_share("1", "9", tmp_path)
+
     def test_save_url(self, tmp_path: Path) -> None:
         response = MagicMock(content=b"jpeg", headers={"content-type": "image/jpeg"})
         with patch("instagram_mcp.client.httpx2.get", return_value=response):
@@ -931,8 +967,8 @@ class TestChannelClientMethods:
         clip.write_bytes(b"opus")
         instagram_client.client.direct_send_voice.return_value = None
         with (
-            patch("instagram_mcp.client.shutil.which", return_value="/usr/bin/ffmpeg"),
-            patch("instagram_mcp.client.subprocess.run") as run,
+            patch("instagram_mcp.video.shutil.which", return_value="/usr/bin/ffmpeg"),
+            patch("instagram_mcp.video.subprocess.run") as run,
         ):
             assert instagram_client.send_voice(clip, "111") is None
         argv = run.call_args.args[0]
@@ -945,7 +981,7 @@ class TestChannelClientMethods:
         self, instagram_client: InstagramClient, tmp_path: Path
     ) -> None:
         with (
-            patch("instagram_mcp.client.shutil.which", return_value=None),
-            pytest.raises(InstagramClientError, match="ffmpeg"),
+            patch("instagram_mcp.video.shutil.which", return_value=None),
+            pytest.raises(FFmpegError, match="ffmpeg is not installed"),
         ):
             instagram_client.send_voice(tmp_path / "v.wav", "111")

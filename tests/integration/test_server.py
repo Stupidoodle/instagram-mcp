@@ -71,6 +71,7 @@ class TestServerIntegration:
             "send_typing",
             "mark_read",
             "download_attachment",
+            "open_share",
             "get_message_ids",
             "unsend",
             "react",

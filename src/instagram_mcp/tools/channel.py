@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from mcp.types import ToolAnnotations
 
 from instagram_mcp.channel import ChannelError
+from instagram_mcp.video import VIDEO_SUFFIXES
 
 if TYPE_CHECKING:
     from mcp.server.mcpserver import MCPServer
@@ -92,7 +93,6 @@ def register_channel_tools(mcp: MCPServer, channel: Channel) -> None:
 
 
 _PHOTO_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".heic"}
-_VIDEO_SUFFIXES = {".mp4", ".mov", ".m4v"}
 
 
 def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Channel) -> None:
@@ -145,12 +145,12 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
                 disappearing photo/video (videos: H.264 mp4). Omit for a normal one.
         """
         suffix = Path(file_path).suffix.lower()
-        if suffix not in _PHOTO_SUFFIXES | _VIDEO_SUFFIXES:
+        if suffix not in _PHOTO_SUFFIXES | VIDEO_SUFFIXES:
             return {
                 "success": False,
                 "error": f"Instagram DMs only take photos and videos, not {suffix}",
             }
-        kind = "video" if suffix in _VIDEO_SUFFIXES else "photo"
+        kind = "video" if suffix in VIDEO_SUFFIXES else "photo"
         try:
             thread_id = target(to)
             channel.expect_echo(thread_id, "media")
@@ -226,6 +226,27 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
         """
         try:
             return bridge.download(target(to), message_id)
+        except ChannelError as e:
+            return _refused(e)
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
+    @mcp.tool()
+    def open_share(
+        message_id: str, to: str | None = None, transcribe: bool = True
+    ) -> dict[str, Any]:
+        """Open a shared reel, post or story: download it to see and hear what's in it.
+
+        Returns the caption, the downloaded photos/videos, one frame-strip image per
+        video (Read it to see what happens) and what is said in it.
+
+        Args:
+            message_id: Message id of the share, from the channel event.
+            to: Chat alias. Omit for the sole subscribed target.
+            transcribe: Transcribe the audio too; False for music-only reels.
+        """
+        try:
+            return bridge.open_share(target(to), message_id, transcribe=transcribe)
         except ChannelError as e:
             return _refused(e)
         except Exception as e:

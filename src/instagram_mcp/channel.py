@@ -136,6 +136,8 @@ INCOMING EVENTS (subscribed chats only) arrive as <channel source="instagram" ch
 - View-once: view_once="true" is a disappearing photo/video. With media_path, Read it
   now (it's deleted soon) and never save, copy or send it anywhere. Without one it
   can't be opened; never pretend you saw it.
+- Share: a shared reel/post/story reads "[reel by @x: caption — link]", cover in
+  media_path. open_share(message_id) gets its frames (Read them) and words.
 - Edit / unsend / reaction: event_type="edit" | "unsend" | "reaction" with
   target_message_id; content is the new text (edit) or the emoji (reaction).
 - Read / typing: event_type="read", "typing" or "typing_stopped".
@@ -148,7 +150,7 @@ INCOMING EVENTS (subscribed chats only) arrive as <channel source="instagram" ch
 
 TOOLS (address by alias, or omit "to" for the sole subscribed target): reply,
 send_file (photo/video), send_audio (voice), send_typing, mark_read,
-download_attachment (older media), get_message_ids (your OWN messages, for unsend),
+download_attachment (older media), open_share, get_message_ids (your OWN messages, for unsend),
 unsend, react ("" removes yours), set_idle (0 pauses; resets when they write),
 subscribe, unsubscribe, list_subscriptions."""
 

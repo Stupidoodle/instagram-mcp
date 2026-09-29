@@ -141,6 +141,20 @@ class TestBridgeClient:
         assert req.url.path == "/send"
         assert json.loads(req.content) == {"thread_id": "t1", "text": "hello"}
 
+    def test_open_share_waits_long_enough(self) -> None:
+        seen: dict[str, httpx2.Request] = {}
+
+        def handler(request: httpx2.Request) -> httpx2.Response:
+            seen["req"] = request
+            return httpx2.Response(200, json={"success": True, "frames": []})
+
+        assert _client(handler).open_share("t1", "m1", transcribe=False)["success"] is True
+        req = seen["req"]
+        assert req.url.path == "/open_share"
+        body = {"thread_id": "t1", "message_id": "m1", "transcribe": False}
+        assert json.loads(req.content) == body
+        assert req.extensions["timeout"]["read"] == 360
+
     def test_react_post_body(self) -> None:
         seen: dict[str, httpx2.Request] = {}
 

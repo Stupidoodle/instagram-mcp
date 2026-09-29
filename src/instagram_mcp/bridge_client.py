@@ -111,9 +111,11 @@ class BridgeClient:
         """Close the underlying HTTP client."""
         self._http.close()
 
-    def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    def _post(
+        self, path: str, body: dict[str, Any], *, timeout: float | None = None
+    ) -> dict[str, Any]:
         try:
-            resp = self._http.post(path, json=body)
+            resp = self._http.post(path, json=body, timeout=timeout or httpx2.USE_CLIENT_DEFAULT)
         except httpx2.HTTPError as e:
             raise BridgeError(f"bridge unreachable: {e}") from e
         data = resp.json()
@@ -178,6 +180,13 @@ class BridgeClient:
     def download(self, thread_id: str, message_id: str) -> dict[str, Any]:
         """Download a message's media; returns `{success, path}`."""
         return self._post("/download", {"thread_id": thread_id, "message_id": message_id})
+
+    def open_share(
+        self, thread_id: str, message_id: str, *, transcribe: bool = True
+    ) -> dict[str, Any]:
+        """Download a shared reel/post/story; `{success, share, files, frames, transcripts}`."""
+        body = {"thread_id": thread_id, "message_id": message_id, "transcribe": transcribe}
+        return self._post("/open_share", body, timeout=360)
 
     def unsend(self, thread_id: str, message_id: str) -> dict[str, Any]:
         """Unsend (delete for everyone) one of our own messages."""
