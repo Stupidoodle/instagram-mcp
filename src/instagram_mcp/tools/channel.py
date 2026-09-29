@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from mcp.types import ToolAnnotations
 
 from instagram_mcp.channel import ChannelError
+from instagram_mcp.shares import Share, describe
 from instagram_mcp.video import VIDEO_SUFFIXES
 
 if TYPE_CHECKING:
@@ -275,7 +276,9 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
     def get_message_ids(
         to: str | None = None, filter: str | None = None, limit: int = 10
     ) -> dict[str, Any]:
-        """List your OWN recent messages with their ids, newest first (for unsend).
+        """List this account's recent messages with their ids, newest first (for unsend).
+
+        That is yours and the ones the owner sent from their phone.
 
         Args:
             to: Chat alias. Omit for the sole subscribed target.
@@ -295,7 +298,8 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
         ][:limit]
         lines = []
         for m in mine:
-            text = m.get("text") or f"[{m.get('media_type')}]"
+            share = Share.from_dict(m.get("share"))
+            text = m.get("text") or (describe(share) if share else f"[{m.get('media_type')}]")
             hhmm = ""
             with contextlib.suppress(ValueError, TypeError):
                 hhmm = datetime.fromisoformat(m["timestamp"]).strftime("%H:%M")
@@ -304,10 +308,13 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
 
     @mcp.tool(annotations=ToolAnnotations(destructive_hint=True))
     def unsend(message_id: str, to: str | None = None) -> dict[str, Any]:
-        """Unsend one of YOUR messages for everyone. Get the id from get_message_ids.
+        """Unsend a message this account sent, for everyone. Get the id from get_message_ids.
+
+        That covers yours and the ones the owner sent from their phone: when the operator
+        tells you to delete one, do it.
 
         Args:
-            message_id: Id of your message.
+            message_id: Id of the message.
             to: Chat alias. Omit for the sole subscribed target.
         """
         try:

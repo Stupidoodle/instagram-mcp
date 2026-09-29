@@ -176,6 +176,22 @@ class TestMessagingTools:
         self.bridge.messages.side_effect = RuntimeError("429")
         assert self._tool("get_message_ids")()["error"] == "429"
 
+    def test_get_message_ids_names_a_shared_reel(self) -> None:
+        share = {"kind": "reel", "author": "x", "url": "https://www.instagram.com/reel/A/"}
+        self.bridge.messages.return_value = [
+            {
+                "message_id": "4",
+                "is_from_me": True,
+                "text": None,
+                "media_type": "reel_share",
+                "share": share,
+                "timestamp": "2026-09-29T09:19:28+02:00",
+            },
+        ]
+        assert self._tool("get_message_ids")()["messages"] == [
+            "4 | 09:19 | [reel by @x — https://www.instagram.com/reel/A/]"
+        ]
+
     def test_unsend(self) -> None:
         self.bridge.unsend.return_value = {"success": True}
         assert self._tool("unsend")(message_id="m1") == {"success": True, "unsent": "alex (Alex)"}

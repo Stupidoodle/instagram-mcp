@@ -151,7 +151,7 @@ INCOMING EVENTS (subscribed chats only) arrive as <channel source="instagram" ch
 
 TOOLS (address by alias, or omit "to" for the sole subscribed target): reply,
 send_file (photo/video), send_audio (voice), send_typing, mark_read,
-download_attachment (older media), get_message_ids (your OWN messages, for unsend),
+download_attachment (older media), get_message_ids (this account's messages, for unsend),
 unsend, react ("" removes yours), set_idle (0 pauses; resets when they write),
 subscribe, unsubscribe, list_subscriptions."""
 
