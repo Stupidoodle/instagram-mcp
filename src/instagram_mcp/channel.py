@@ -44,6 +44,7 @@ from instagram_mcp.mqtt.events import (
     TypingEvent,
     UnsendEvent,
 )
+from instagram_mcp.shares import describe
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,6 +54,7 @@ if TYPE_CHECKING:
     from mcp.types import ServerNotification
 
     from instagram_mcp.mqtt.events import Event
+    from instagram_mcp.shares import Share
 
 logger = logging.getLogger("instagram_mcp.channel")
 
@@ -64,6 +66,12 @@ def _media_meta(event: MessageEvent) -> dict[str, str]:
         "transcript": event.transcript,
         "media_error": event.media_error,
     }
+    return {key: value for key, value in fields.items() if value}
+
+
+def _share_meta(share: Share) -> dict[str, str]:
+    """What kind of share it is, whose, and where it lives."""
+    fields = {"share_kind": share.kind, "share_author": share.author, "share_url": share.url}
     return {key: value for key, value in fields.items() if value}
 
 
@@ -473,6 +481,10 @@ class Channel:
             meta["link_title"] = event.link_title
         if event.item_type == "raven_media" and event.view_mode != "permanent":
             return _view_once(event, user), meta | _view_once_meta(event)
+        if event.share is not None:
+            meta |= _share_meta(event.share) | _media_meta(event)
+            label = describe(event.share)
+            return f"{text} {label}" if text else label, meta
         if event.item_type not in {"text", "unknown"}:
             meta["media_type"] = event.item_type
             meta |= _media_meta(event)

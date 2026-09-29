@@ -15,6 +15,7 @@ from instagram_mcp.mqtt.parser import (
     parse_payload,
     parse_publish_packet,
 )
+from instagram_mcp.shares import Share
 
 
 class TestParsePublishPacket:
@@ -487,6 +488,39 @@ class TestParseRavenItem:
         )
         assert isinstance(events[0], MessageEvent)
         assert events[0].view_mode == "permanent"
+
+
+class TestParseShareItem:
+    """A shared reel arrives as an xma_clip card."""
+
+    def test_the_share_is_parsed(self) -> None:
+        card = {
+            "header_title_text": "someone.cooks",
+            "target_url": "https://www.instagram.com/reel/ABC/?id=1_2",
+            "preview_url_info": {"url": "https://cdn.test/c.jpg"},
+        }
+        value = {
+            "item_id": "30000000000000000000000000000000007",
+            "user_id": 42,
+            "timestamp": 1,
+            "item_type": "xma_clip",
+            "xma_clip": [card],
+            "original_media_igid": "111",
+        }
+        events, _ = parse_payload(
+            "146",
+            _patches(
+                {"op": "add", "path": "/direct_v2/threads/T1/items/X", "value": json.dumps(value)}
+            ),
+        )
+        assert isinstance(events[0], MessageEvent)
+        assert events[0].share == Share(
+            kind="reel",
+            url="https://www.instagram.com/reel/ABC/",
+            author="someone.cooks",
+            media_id="111",
+            preview_url="https://cdn.test/c.jpg",
+        )
 
 
 class TestParseIrisTypingEvent:

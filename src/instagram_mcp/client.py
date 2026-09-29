@@ -37,6 +37,7 @@ from instagram_mcp.models.schemas import (
     ThreadUser,
 )
 from instagram_mcp.raven import ViewMode, send_disappearing
+from instagram_mcp.shares import share_from_message
 
 if TYPE_CHECKING:
     from instagrapi.types import DirectMessage as IGDirectMessage
@@ -106,9 +107,43 @@ def _determine_media_type(item: IGDirectMessage) -> MediaType:
         "raven_media": MediaType.RAVEN_MEDIA,
         "placeholder": MediaType.PLACEHOLDER,
         "xma_share": MediaType.XMA,
+        "xma_clip": MediaType.REEL_SHARE,
+        "felix_share": MediaType.REEL_SHARE,
+        "xma_media_share": MediaType.MEDIA_SHARE,
+        "xma_story_share": MediaType.STORY_SHARE,
+        "xma_profile": MediaType.PROFILE,
+        "generic_xma": MediaType.XMA,
     }
 
     return type_mapping.get(item_type, MediaType.UNKNOWN)
+
+
+def _message_content(msg: IGDirectMessage) -> MessageContent:
+    """What a message says or shows: text, media, a link or a share."""
+    media_url = None
+    if hasattr(msg, "media") and msg.media and hasattr(msg.media, "thumbnail_url"):
+        media_url = str(msg.media.thumbnail_url)
+
+    text = msg.text if msg.text else None
+    link_url, link_title = None, None
+    link = getattr(msg, "link", None)
+    if link is not None:
+        # A link message keeps its text and preview under `link`.
+        text = text or link.text or None
+        context = link.link_context
+        if context is not None and context.link_url:
+            link_url = unwrap_link(str(context.link_url))
+            link_title = context.link_title or None
+
+    share = share_from_message(msg)
+    return MessageContent(
+        text=text,
+        media_url=media_url or (share.preview_url if share else None),
+        media_type=_determine_media_type(msg),
+        link_url=link_url,
+        link_title=link_title,
+        share=share,
+    )
 
 
 def _convert_message(
@@ -130,30 +165,7 @@ def _convert_message(
     Returns:
         DirectMessage: Converted message model.
     """
-    media_type = _determine_media_type(msg)
-
-    media_url = None
-    if hasattr(msg, "media") and msg.media and hasattr(msg.media, "thumbnail_url"):
-        media_url = str(msg.media.thumbnail_url)
-
-    text = msg.text if msg.text else None
-    link_url, link_title = None, None
-    link = getattr(msg, "link", None)
-    if link is not None:
-        # A link message keeps its text and preview under `link`.
-        text = text or link.text or None
-        context = link.link_context
-        if context is not None and context.link_url:
-            link_url = unwrap_link(str(context.link_url))
-            link_title = context.link_title or None
-
-    content = MessageContent(
-        text=text,
-        media_url=media_url,
-        media_type=media_type,
-        link_url=link_url,
-        link_title=link_title,
-    )
+    content = _message_content(msg)
 
     # Look up user from thread's users, fall back to message's user info
     user_id = str(msg.user_id) if msg.user_id else "0"

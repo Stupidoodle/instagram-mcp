@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from instagram_mcp.catch_up import CatchUp, ChannelState, history_event, state_path
 from instagram_mcp.mqtt.events import MessageEvent, TypingEvent
+from instagram_mcp.shares import Share
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -120,6 +121,13 @@ def test_history_items_become_backfilled_events() -> None:
     assert event is not None
     assert (event.item_type, event.backfilled, event.user_id) == ("voice_media", True, 42)
     assert history_event("t1", _item("7", "placeholder")) is None
+
+
+def test_a_backfilled_share_keeps_its_share() -> None:
+    share = {"kind": "reel", "author": "x", "url": "https://www.instagram.com/reel/A/"}
+    event = history_event("t1", _item("8", "reel_share") | {"share": share})
+    assert event is not None
+    assert event.share == Share.from_dict(share)
 
 
 def test_a_broken_state_file_starts_fresh(tmp_path: Path) -> None:

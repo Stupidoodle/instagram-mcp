@@ -26,6 +26,7 @@ def _msg(
     media_url: str | None = None,
     timestamp: str = "2024-01-15T10:30:00",
     seen_since: int | None = None,
+    share: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """A message in the bridge's JSON shape."""
     return {
@@ -38,6 +39,7 @@ def _msg(
         "timestamp": timestamp,
         "is_from_me": is_from_me,
         "seen_since": seen_since,
+        "share": share,
     }
 
 
@@ -81,6 +83,15 @@ class TestMessageTools(_Base):
         # seen_since included for viewer's own messages
         assert "seen_since" in result["messages"][0]
         self.bridge.messages.assert_called_once_with("123456789", amount=20)
+
+    def test_get_messages_includes_a_share(self) -> None:
+        share = {"kind": "reel", "author": "x", "url": "https://www.instagram.com/reel/A/"}
+        self.bridge.messages.return_value = [
+            _msg("1", text=None, media_type="reel_share", share=share),
+        ]
+        tool_fn = self._get_tool_fn("get_messages")
+        assert tool_fn is not None
+        assert tool_fn(thread_id="1")["messages"][0]["share"] == share
 
     def test_get_messages_includes_media_url(self) -> None:
         self.bridge.messages.return_value = [

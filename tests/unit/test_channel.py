@@ -28,6 +28,7 @@ from instagram_mcp.mqtt.events import (
     TypingEvent,
     UnsendEvent,
 )
+from instagram_mcp.shares import Share
 
 ME = "1000"
 HER = "2000"
@@ -461,6 +462,36 @@ class TestLink:
         assert content == "survey: https://example.com/s"
         assert meta["link_url"] == "https://example.com/s"
         assert meta["link_title"] == "Survey"
+
+
+class TestShare:
+    REEL = Share(
+        kind="reel",
+        url="https://www.instagram.com/reel/ABC/",
+        author="someone.cooks",
+        caption="can you eat for me",
+    )
+
+    def test_a_shared_reel_says_what_it_is(self) -> None:
+        channel, sent = _channel()
+        channel.subscribe(T1, "alex")
+        channel.handle(
+            _msg(text=None, item_type="xma_clip", share=self.REEL, media_path="/m/c.jpg")
+        )
+        content, meta = sent[-1]
+        assert content == (
+            "[reel by @someone.cooks: can you eat for me — https://www.instagram.com/reel/ABC/]"
+        )
+        assert meta["share_kind"] == "reel"
+        assert meta["share_author"] == "someone.cooks"
+        assert meta["share_url"] == "https://www.instagram.com/reel/ABC/"
+        assert meta["media_path"] == "/m/c.jpg"
+
+    def test_text_sent_with_a_share_comes_first(self) -> None:
+        channel, sent = _channel()
+        channel.subscribe(T1, "alex")
+        channel.handle(_msg(text="lol", item_type="xma_clip", share=Share(kind="post")))
+        assert sent[-1][0] == "lol [post]"
 
 
 class TestMedia:

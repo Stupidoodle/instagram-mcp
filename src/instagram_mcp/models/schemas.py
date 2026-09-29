@@ -9,6 +9,8 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
+from instagram_mcp.shares import Share
+
 
 class MediaType(str, Enum):
     """Types of media that can be sent in direct messages."""
@@ -63,6 +65,7 @@ class MessageContent(BaseModel):
     media_type: MediaType = Field(default=MediaType.TEXT, description="Type of media")
     link_url: str | None = Field(default=None, description="Shared URL of a link message")
     link_title: str | None = Field(default=None, description="Preview title of the link")
+    share: Share | None = Field(default=None, description="A shared reel, post, story or profile")
 
 
 class Reaction(BaseModel):

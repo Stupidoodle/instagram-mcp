@@ -7,6 +7,10 @@ or Skywalker pubsub (topic 88) and routed by thread_id.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from instagram_mcp.shares import Share
 
 
 @dataclass(frozen=True)
@@ -28,6 +32,7 @@ class MessageEvent(Event):
     edited: bool = False
     link_url: str | None = None  # the shared URL, for item_type "link"
     link_title: str | None = None  # its preview title
+    share: Share | None = None  # a shared reel, post, story or profile
     media_path: str | None = None  # downloaded photo/video/voice file (inbound media)
     transcript: str | None = None  # voice notes
     media_error: str | None = None  # why the download or transcription failed

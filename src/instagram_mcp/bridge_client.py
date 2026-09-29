@@ -26,6 +26,7 @@ from instagram_mcp.mqtt.events import (
     TypingEvent,
     UnsendEvent,
 )
+from instagram_mcp.shares import Share
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
@@ -54,6 +55,7 @@ def event_from_dict(d: dict[str, Any]) -> Event | None:  # noqa: PLR0911
                 edited=bool(d.get("edited", False)),
                 link_url=d.get("link_url"),
                 link_title=d.get("link_title"),
+                share=Share.from_dict(d.get("share")),
                 media_path=d.get("media_path"),
                 transcript=d.get("transcript"),
                 media_error=d.get("media_error"),

@@ -41,7 +41,8 @@ def register_message_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
 
         Returns:
             Object with 'thread_id', 'messages' (sender, text, media_type,
-            timestamp, seen_since when viewer's), 'count', 'offset', 'has_more'.
+            timestamp, seen_since when viewer's, share for a shared reel/post/story),
+            'count', 'offset', 'has_more'.
         """
         try:
             fetch_total = offset + amount
@@ -66,6 +67,8 @@ def register_message_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
             if m.get("link_url"):
                 d["link_url"] = m["link_url"]
                 d["link_title"] = m.get("link_title")
+            if m.get("share"):
+                d["share"] = m["share"]
             result_messages.append(d)
         return {
             "thread_id": thread_id,

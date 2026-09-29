@@ -119,6 +119,23 @@ class TestConvertMessage:
 
         assert [(r.user_id, r.emoji) for r in msg.reactions] == [("42", "🩷"), ("43", "❤️")]
 
+    def test_convert_message_shared_reel(self, mock_ig_message: MagicMock) -> None:
+        card = {
+            "header_title_text": "someone.cooks",
+            "target_url": "https://www.instagram.com/reel/ABC/?id=1_2",
+            "preview_url_info": {"url": "https://cdn.test/c.jpg"},
+        }
+        mock_ig_message.text = None
+        mock_ig_message.item_type = "xma_clip"
+        mock_ig_message.raw_xma = {"xma_clip": [card]}
+
+        content = _convert_message(mock_ig_message, "123456789").content
+
+        assert content.media_type == MediaType.REEL_SHARE
+        assert content.media_url == "https://cdn.test/c.jpg"
+        assert content.share is not None
+        assert (content.share.kind, content.share.author) == ("reel", "someone.cooks")
+
     def test_convert_message_without_reactions(self, mock_ig_message: MagicMock) -> None:
         assert _convert_message(mock_ig_message, "123456789").reactions == []
 

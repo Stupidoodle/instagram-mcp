@@ -27,6 +27,7 @@ from instagram_mcp.mqtt.events import (
     TypingEvent,
     UnsendEvent,
 )
+from instagram_mcp.shares import Share
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -53,6 +54,15 @@ ROUND_TRIP_EVENTS: list[Event] = [
         1_700_000_000_003,
         view_mode="once",
         media_path="/tmp/instagram-ephemeral/t1/i4.jpg",
+    ),
+    MessageEvent(
+        "t1",
+        "i5",
+        5,
+        None,
+        "xma_clip",
+        1,
+        share=Share(kind="reel", url="https://www.instagram.com/reel/A/", author="x"),
     ),
     ReactionEvent("t1", "i1", 5, "emojis", "🔥"),
     ReactionEvent("t1", "i1", 5, "likes", None),

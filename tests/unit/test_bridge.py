@@ -21,6 +21,7 @@ from instagram_mcp.mqtt.events import (
     TypingEvent,
     UnsendEvent,
 )
+from instagram_mcp.shares import Share
 
 if TYPE_CHECKING:
     import pytest
@@ -40,11 +41,17 @@ class TestEventToDict:
             "edited": True,
             "link_url": None,
             "link_title": None,
+            "share": None,
             "media_path": None,
             "transcript": None,
             "media_error": None,
             "view_mode": None,
         }
+
+    def test_message_with_a_share(self) -> None:
+        share = Share(kind="reel", url="https://www.instagram.com/reel/A/", author="x")
+        event = MessageEvent("t1", "i1", 5, None, "xma_clip", 1, share=share)
+        assert event_to_dict(event)["share"] == share.to_dict()
 
     def test_reaction(self) -> None:
         event = ReactionEvent("t1", "i1", 5, "emojis", "🔥")
@@ -128,6 +135,7 @@ class TestJsonSerializers:
                 media_url=None,
                 link_url=None,
                 link_title=None,
+                share=Share(kind="post", author="x"),
             ),
             timestamp=datetime(2024, 1, 15, 10, 30, 0),
             is_sent_by_viewer=True,
@@ -144,6 +152,7 @@ class TestJsonSerializers:
             "media_url": None,
             "link_url": None,
             "link_title": None,
+            "share": {"kind": "post", "author": "x"},
             "timestamp": "2024-01-15T10:30:00+01:00",
             "is_from_me": True,
             "seen_since": 5,

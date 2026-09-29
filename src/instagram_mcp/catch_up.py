@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from instagram_mcp.mqtt.events import MessageEvent
+from instagram_mcp.shares import Share
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -183,6 +184,7 @@ def history_event(thread_id: str, item: dict[str, Any]) -> MessageEvent | None:
         int(at.astimezone().timestamp() * 1_000_000),
         link_url=item.get("link_url"),
         link_title=item.get("link_title"),
+        share=Share.from_dict(item.get("share")),
         backfilled=True,
     )
 

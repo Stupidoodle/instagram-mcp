@@ -26,6 +26,7 @@ from instagram_mcp.mqtt.events import (
     UnsendEvent,
 )
 from instagram_mcp.mqtt.topics import MESSAGE_SYNC, PUBSUB, TOPIC_NAMES
+from instagram_mcp.shares import share_from_item
 
 logger = logging.getLogger("instagram_mcp.mqtt")
 
@@ -269,6 +270,7 @@ def _parse_message(
         edited=edited,
         link_url=link_url,
         link_title=link_title,
+        share=share_from_item(value),
         view_mode=view_mode,
     )
 
