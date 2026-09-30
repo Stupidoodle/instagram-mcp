@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 from instagrapi import config as ig_config
 
+from instagram_mcp import instruments
 from instagram_mcp.mqtt.connection import PINGREQ, PINGRESP, PUBACK, PUBLISH, MQTToTConnection
 from instagram_mcp.mqtt.parser import parse_payload, parse_publish_packet
 from instagram_mcp.mqtt.thrift import build_connect_payload
@@ -210,7 +211,11 @@ class MQTTManager:
         self._snapshot_at_ms = snapshot_at_ms
         self._app_version = app_version
 
-        self._do_connect(session_file, seq_id, snapshot_at_ms, app_version)
+        try:
+            self._do_connect(session_file, seq_id, snapshot_at_ms, app_version)
+        except Exception:
+            instruments.connection_event("connect_failed")
+            raise
 
     def _do_connect(
         self,
@@ -287,9 +292,11 @@ class MQTTManager:
                 time.sleep(1)
                 self._reconnect_count += 1
                 logger.info("MQTT reconnected", extra={"reconnects": self._reconnect_count})
+                instruments.connection_event("reconnect")
                 return True
             except Exception:
                 logger.exception("MQTT reconnect failed")
+                instruments.connection_event("connect_failed")
                 return False
 
     def disconnect(self) -> None:
@@ -384,6 +391,7 @@ class MQTTManager:
                     )
         except Exception:
             logger.exception("MQTT reader loop crashed")
+            instruments.connection_event("stream_error")
 
         logger.info("MQTT reader loop stopped")
 
