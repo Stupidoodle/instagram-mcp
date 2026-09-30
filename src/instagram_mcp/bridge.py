@@ -57,6 +57,7 @@ from instagram_mcp.mqtt.events import (
 )
 from instagram_mcp.mqtt.manager import MQTTManager
 from instagram_mcp.seen_log import SeenLog
+from instagram_mcp.telemetry import bridge_identity, configure_telemetry, shutdown_telemetry
 from instagram_mcp.video import VIDEO_SUFFIXES, duration, frame_strip, has_audio, to_m4a
 
 if TYPE_CHECKING:
@@ -755,6 +756,7 @@ class BridgeServer(uvicorn.Server):
 def main() -> None:
     """Entry point for `uv run instagram-bridge`."""
     settings = get_settings()
+    configure_telemetry(bridge_identity())
     setup_logging(settings.log_level)
     host = settings.instagram_bridge_host
     port = settings.instagram_bridge_port
@@ -772,6 +774,8 @@ def main() -> None:
     except (AuthenticationError, SessionError) as e:
         logger.error("Instagram auth failed: %s. Run instagram-mcp-login first.", e)
         raise
+    finally:
+        shutdown_telemetry()
     if not server.started:
         sys.exit(3)  # uvicorn's startup-failure code, so systemd restarts us
 

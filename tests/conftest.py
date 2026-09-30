@@ -7,17 +7,70 @@ the real ``InstagramClient`` (which now lives inside the bridge), so the
 instagrapi-shaped fixtures below are kept for it.
 """
 
+from __future__ import annotations
+
+import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
-import pytest
-from mcp.server.mcpserver import MCPServer
+# No test may export to a real collector or pick up a persona folder from the shell.
+for _name in [n for n in os.environ if n.startswith("OTEL_") or n == "DM_PERSONA_DIR"]:
+    del os.environ[_name]
 
-from instagram_mcp.bridge_client import BridgeClient
-from instagram_mcp.client import InstagramClient
-from instagram_mcp.config import Settings
+import pytest  # noqa: E402
+from mcp.server.mcpserver import MCPServer  # noqa: E402
+from opentelemetry import _logs, metrics, trace  # noqa: E402
+from opentelemetry.sdk._logs import LoggerProvider  # noqa: E402
+from opentelemetry.sdk._logs.export import (  # noqa: E402
+    InMemoryLogRecordExporter,
+    SimpleLogRecordProcessor,
+)
+from opentelemetry.sdk.metrics import MeterProvider  # noqa: E402
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E402
+    InMemorySpanExporter,
+)
+
+from instagram_mcp.bridge_client import BridgeClient  # noqa: E402
+from instagram_mcp.client import InstagramClient  # noqa: E402
+from instagram_mcp.config import Settings  # noqa: E402
+from tests.support.telemetry import Telemetry  # noqa: E402
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+
+def _install_telemetry() -> Telemetry:
+    """Global in-memory providers, installed once for the whole session.
+
+    Installed when the suite starts, not when first asked, so every test sees the same
+    tracer state whatever the order (the bridge adds a traceparent only while tracing).
+    """
+    spans, logs = InMemorySpanExporter(), InMemoryLogRecordExporter()
+    reader = InMemoryMetricReader()
+    tracer_provider = TracerProvider(shutdown_on_exit=False)
+    tracer_provider.add_span_processor(SimpleSpanProcessor(spans))
+    logger_provider = LoggerProvider(shutdown_on_exit=False)
+    logger_provider.add_log_record_processor(SimpleLogRecordProcessor(logs))
+    trace.set_tracer_provider(tracer_provider)
+    metrics.set_meter_provider(MeterProvider(metric_readers=[reader], shutdown_on_exit=False))
+    _logs.set_logger_provider(logger_provider)
+    return Telemetry(spans, reader, logs)
+
+
+_TELEMETRY = _install_telemetry()
+
+
+@pytest.fixture
+def telemetry() -> Iterator[Telemetry]:
+    """The recorded spans and logs (this test's only) and metrics (the session's)."""
+    _TELEMETRY.clear()
+    yield _TELEMETRY
+    _TELEMETRY.clear()
 
 
 @pytest.fixture
