@@ -15,6 +15,7 @@ from instagram_mcp.bridge_client import BridgeClient, stream_events
 from instagram_mcp.catch_up import CatchUp, ChannelState, state_path
 from instagram_mcp.channel import INSTRUCTIONS, Channel, ChannelError, ChannelMCPServer
 from instagram_mcp.config import Settings, get_settings, setup_logging
+from instagram_mcp.mcp_telemetry import operation_middleware
 from instagram_mcp.telemetry import configure_telemetry, persona_identity, shutdown_telemetry
 from instagram_mcp.tools import (
     register_channel_tools,
@@ -52,7 +53,8 @@ def create_server(settings: Settings | None = None) -> MCPServer:
 
     if settings is None:
         settings = get_settings()
-    configure_telemetry(persona_identity())
+    identity = persona_identity()
+    configure_telemetry(identity)
     logger = setup_logging(settings.log_level)
 
     _bridge = BridgeClient(settings.instagram_bridge_url)
@@ -84,8 +86,10 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     if settings.instagram_control_thread:
         _channel.subscribe(settings.instagram_control_thread, "control")
 
+    # Inside the SDK's own span per message: persona, tool errors and durations.
+    operations = operation_middleware(identity.persona or "")
     _mcp = ChannelMCPServer(
-        "instagram-mcp", instructions=INSTRUCTIONS, middleware=[_channel.middleware]
+        "instagram-mcp", instructions=INSTRUCTIONS, middleware=[operations, _channel.middleware]
     )
 
     # Consume the bridge's domain-event SSE stream on a daemon thread. It reconnects
