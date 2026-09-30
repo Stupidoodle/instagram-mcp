@@ -90,11 +90,7 @@ class TestEventFromDict:
 
 def _client(handler: Callable[[httpx2.Request], httpx2.Response]) -> BridgeClient:
     """A BridgeClient whose transport is driven by a mock request handler."""
-    bridge = BridgeClient("http://bridge.test")
-    bridge._http = httpx2.Client(
-        base_url="http://bridge.test", transport=httpx2.MockTransport(handler)
-    )
-    return bridge
+    return BridgeClient("http://bridge.test", transport=httpx2.MockTransport(handler))
 
 
 class TestBridgeClient:
