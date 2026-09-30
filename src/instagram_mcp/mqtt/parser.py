@@ -79,9 +79,8 @@ def parse_payload(topic: str, raw_payload: bytes) -> tuple[list[Event], int]:
         data = json.loads(text)
     except Exception:
         logger.warning(
-            "Could not decompress/parse payload on %s (%dB)",
-            topic_name,
-            len(raw_payload),
+            "Could not decompress or parse an MQTT payload",
+            extra={"topic": topic_name, "bytes": len(raw_payload)},
         )
         return [], 0
 

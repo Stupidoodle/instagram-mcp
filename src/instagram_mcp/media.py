@@ -29,6 +29,11 @@ logger = logging.getLogger("instagram_mcp.media")
 MEDIA_ITEM_TYPES = {"media", "voice_media", "raven_media"}
 
 
+def _failure(event: MessageEvent, exc: Exception) -> dict[str, str]:
+    """Log fields for a failed fetch: the message id and the error class, no error text."""
+    return {"message_id": event.item_id, "error_type": type(exc).__name__}
+
+
 class InboundMedia:
     """Per-chat event queue that fetches inbound media before delivering its event."""
 
@@ -90,7 +95,7 @@ class InboundMedia:
                 run_in_threadpool(self._describe_share, event), timeout=self._timeout
             )
         except Exception as exc:
-            logger.warning("Share lookup failed for %s: %s", event.item_id, exc)
+            logger.warning("Share lookup failed", extra=_failure(event, exc))
             return dataclasses.replace(event, media_error=f"share lookup failed: {exc}")
 
     async def _enrich(self, event: MessageEvent) -> MessageEvent:
@@ -99,14 +104,14 @@ class InboundMedia:
                 run_in_threadpool(self._download, event), timeout=self._timeout
             )
         except Exception as exc:
-            logger.warning("Media download failed for %s: %s", event.item_id, exc)
+            logger.warning("Media download failed", extra=_failure(event, exc))
             return dataclasses.replace(event, media_error=f"download failed: {exc}")
         if event.item_type != "voice_media":
             return dataclasses.replace(event, media_path=str(path))
         try:
             transcript = await asyncio.wait_for(self._transcribe(path), timeout=self._timeout)
         except Exception as exc:
-            logger.warning("Transcription failed for %s: %s", event.item_id, exc)
+            logger.warning("Transcription failed", extra=_failure(event, exc))
             return dataclasses.replace(
                 event, media_path=str(path), media_error=f"transcription failed: {exc}"
             )

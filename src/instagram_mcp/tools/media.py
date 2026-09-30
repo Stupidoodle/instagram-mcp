@@ -31,7 +31,7 @@ def register_media_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
         try:
             return {**bridge.share_media(media_id, thread_id), "media_id": media_id}
         except Exception as e:
-            logger.exception("Error sharing media %s", media_id)
+            logger.exception("Error sharing media")
             return {"error": str(e), "media_id": media_id}
 
     @mcp.tool()
@@ -45,5 +45,5 @@ def register_media_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
         try:
             return {**bridge.share_profile(user_id, thread_id), "user_id": user_id}
         except Exception as e:
-            logger.exception("Error sharing profile %s", user_id)
+            logger.exception("Error sharing a profile")
             return {"error": str(e), "user_id": user_id}

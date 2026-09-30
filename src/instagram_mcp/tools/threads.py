@@ -61,7 +61,7 @@ def register_thread_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
         try:
             t = bridge.thread(thread_id, amount=amount)
         except Exception as e:
-            logger.exception("Error getting thread %s", thread_id)
+            logger.exception("Error getting a thread")
             return {"error": str(e)}
         if "error" in t:
             return t
@@ -113,7 +113,7 @@ def register_thread_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
         try:
             return {**bridge.hide(thread_id), "thread_id": thread_id}
         except Exception as e:
-            logger.exception("Error hiding thread %s", thread_id)
+            logger.exception("Error hiding a thread")
             return {"error": str(e), "thread_id": thread_id}
 
     @mcp.tool()
@@ -126,7 +126,7 @@ def register_thread_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
         try:
             return {**bridge.mark_unread(thread_id), "thread_id": thread_id}
         except Exception as e:
-            logger.exception("Error marking thread unread %s", thread_id)
+            logger.exception("Error marking a thread unread")
             return {"error": str(e), "thread_id": thread_id}
 
     @mcp.tool()
@@ -139,7 +139,7 @@ def register_thread_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
         try:
             return {**bridge.mute(thread_id), "thread_id": thread_id}
         except Exception as e:
-            logger.exception("Error muting thread %s", thread_id)
+            logger.exception("Error muting a thread")
             return {"error": str(e), "thread_id": thread_id}
 
     @mcp.tool()
@@ -152,5 +152,5 @@ def register_thread_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
         try:
             return {**bridge.unmute(thread_id), "thread_id": thread_id}
         except Exception as e:
-            logger.exception("Error unmuting thread %s", thread_id)
+            logger.exception("Error unmuting a thread")
             return {"error": str(e), "thread_id": thread_id}

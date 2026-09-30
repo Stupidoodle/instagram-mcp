@@ -92,7 +92,7 @@ def event_from_dict(d: dict[str, Any]) -> Event | None:  # noqa: PLR0911
         if kind == "thread":
             return ThreadEvent(thread_id=d["thread_id"], op=d.get("op", ""), path=d.get("path", ""))
     except KeyError, ValueError, TypeError:
-        logger.warning("Malformed bridge event: %s", d)
+        logger.warning("Malformed bridge event", extra={"event": str(kind)})
     return None
 
 
@@ -273,7 +273,7 @@ def stream_events(
                 # The response must stay open while it is read: iterate inside the block.
                 resp.raise_for_status()
                 backoff = 1.0
-                logger.info("Connected to bridge events at %s/events", base_url)
+                logger.info("Connected to bridge events", extra={"bridge_url": base_url})
                 for frame in sse_frames(resp.iter_lines()):
                     if stop():
                         return
@@ -282,7 +282,9 @@ def stream_events(
             if stop():
                 return
             logger.warning(
-                "Bridge event stream dropped; reconnecting in %.0fs", backoff, exc_info=True
+                "Bridge event stream dropped; reconnecting",
+                extra={"backoff_s": backoff},
+                exc_info=True,
             )
             time.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
@@ -339,4 +341,4 @@ def _dispatch(frame: SSEFrame, on_event: Callable[[Event], None], catch_up: Catc
         else:
             on_event(event)
     except Exception:
-        logger.exception("Channel handler failed on %s", type(event).__name__)
+        logger.exception("Channel handler failed", extra={"event": type(event).__name__})
