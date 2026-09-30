@@ -30,6 +30,9 @@ from typing import TYPE_CHECKING, Any
 
 import httpx2
 import uvicorn
+from opentelemetry import trace
+from opentelemetry.propagate import inject
+from opentelemetry.trace import SpanKind, StatusCode
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware import Middleware
@@ -51,6 +54,7 @@ from instagram_mcp.event_log import EventLog
 from instagram_mcp.http_telemetry import HttpServerTelemetry
 from instagram_mcp.media import InboundMedia
 from instagram_mcp.mqtt.events import (
+    Event,
     MessageEvent,
     ReactionEvent,
     SeenEvent,
@@ -74,11 +78,22 @@ if TYPE_CHECKING:
     from datetime import datetime
     from pathlib import Path
 
+    from opentelemetry.trace import Span
     from starlette.requests import Request
 
-    from instagram_mcp.mqtt.events import Event
-
 logger = logging.getLogger("instagram_mcp.bridge")
+
+PLATFORM = instruments.PLATFORM
+
+# The SSE ``type`` of each event class (the values of ``dm.bridge.events.published``).
+_EVENT_TYPES: dict[type[Event], str] = {
+    MessageEvent: "message",
+    ReactionEvent: "reaction",
+    SeenEvent: "read",
+    TypingEvent: "typing",
+    UnsendEvent: "unsent",
+    ThreadEvent: "thread",
+}
 
 
 def event_to_dict(event: Event) -> dict[str, Any] | None:  # noqa: PLR0911
@@ -167,6 +182,8 @@ class Gateway:
         )
         self.self_user_id = str(self.client.client.user_id or "")
         instruments.sources.bridge_connected = self.mqtt_connected
+        instruments.sources.bridge_sse_clients = self.sse_clients
+        instruments.sources.bridge_queues = self.queue_depths
         self._media = InboundMedia(
             self_user_id=self.self_user_id,
             download=self._download_media,
@@ -195,6 +212,18 @@ class Gateway:
         """Whether the MQTT connection is up."""
         return self.mqtt is not None and self.mqtt.is_connected
 
+    def sse_clients(self) -> int:
+        """How many SSE subscribers are connected."""
+        return len(self._subscribers)
+
+    def queue_depths(self) -> dict[str, int]:
+        """Items waiting in the bridge's queues, by queue."""
+        return {
+            "media": self._media.pending if self._media is not None else 0,
+            "sse_backlog": sum(q.qsize() for q in list(self._subscribers)),
+            "event_log": len(self.events),
+        }
+
     def stop(self) -> None:
         """Disconnect the MQTT connection (called on app shutdown)."""
         if self._sweeper is not None:
@@ -209,10 +238,40 @@ class Gateway:
     def _on_event(self, event: Event) -> None:
         if self._loop is None or self._media is None:
             return
-        # Hop from the reader thread onto the event loop; InboundMedia keeps chat order.
-        self._loop.call_soon_threadsafe(self._media.submit, event)
+        span = self._event_span(event)
+        # Hop from the reader thread onto the event loop; InboundMedia keeps chat order
+        # and keeps the span current until the event went out.
+        try:
+            self._loop.call_soon_threadsafe(self._media.submit, event, span)
+        except RuntimeError:  # the loop closed under us (shutdown)
+            span.end()
+            raise
+
+    def _event_span(self, event: Event) -> Span:
+        """A CONSUMER span for one MQTT event: its type, kind, direction and message id."""
+        event_type = _EVENT_TYPES.get(type(event), "other")
+        attributes: dict[str, str] = {"dm.platform": PLATFORM, "dm.event.type": event_type}
+        user_id = getattr(event, "user_id", None)
+        if user_id is not None:
+            attributes["dm.direction"] = instruments.direction(user_id, self.self_user_id)
+        item_id = getattr(event, "item_id", None)
+        if item_id:
+            attributes["messaging.message.id"] = item_id
+        kind = _counted_kind(event)
+        if kind is not None:
+            attributes["dm.message.kind"] = kind
+        return instruments.tracer.start_span(
+            f"instagram.event {event_type}", kind=SpanKind.CONSUMER, attributes=attributes
+        )
 
     def _deliver(self, event: Event) -> None:
+        """Publish one (enriched) event to every SSE subscriber, inside its span."""
+        kind = _counted_kind(event)
+        if kind is not None:
+            who = instruments.direction(getattr(event, "user_id", ""), self.self_user_id)
+            attributes = {"platform": PLATFORM, "direction": who, "kind": kind}
+            instruments.bridge_messages.add(1, attributes)
+            trace.get_current_span().set_attribute("dm.message.kind", kind)  # now known
         if isinstance(event, SeenEvent) and self.seen_log is not None:
             try:
                 self.seen_log.add(event)
@@ -220,7 +279,12 @@ class Gateway:
                 logger.warning("Could not record a seen event", exc_info=True)
         payload = event_to_dict(event)
         if payload is not None:
+            carrier: dict[str, str] = {}
+            inject(carrier)  # the event span's context, so consumers continue its trace
+            if "traceparent" in carrier:
+                payload["traceparent"] = carrier["traceparent"]
             self._fan_out(self.events.record(json.dumps(payload)))
+            instruments.events_published.add(1, {"platform": PLATFORM, "type": payload["type"]})
 
     def _download_media(self, event: MessageEvent) -> Path:
         """Download an inbound message's media (on a worker thread)."""
@@ -313,9 +377,23 @@ class Gateway:
             await asyncio.sleep(60)
 
     async def _transcribe(self, path: Path) -> str:
-        url = self.settings.instagram_transcriber_url.rstrip("/") + "/transcribe"
-        async with httpx2.AsyncClient(timeout=150) as http:
-            resp = await http.post(url, json={"path": str(path)})
+        url = httpx2.URL(self.settings.instagram_transcriber_url.rstrip("/") + "/transcribe")
+        attributes = {
+            "http.request.method": "POST",
+            "server.address": url.host,
+            "server.port": url.port or 80,
+            "url.full": str(url),
+        }
+        client = SpanKind.CLIENT
+        with instruments.span("POST /transcribe", kind=client, attributes=attributes) as span:
+            headers: dict[str, str] = {}
+            inject(headers)  # the transcriber continues this trace
+            async with httpx2.AsyncClient(timeout=150) as http:
+                resp = await http.post(url, json={"path": str(path)}, headers=headers)
+            span.set_attribute("http.response.status_code", resp.status_code)
+            if resp.status_code >= 400:
+                span.set_attribute("error.type", str(resp.status_code))
+                span.set_status(StatusCode.ERROR)
         if resp.status_code != 200:
             raise RuntimeError(resp.json().get("error", f"HTTP {resp.status_code}"))
         return str(resp.json()["text"])
@@ -326,6 +404,8 @@ class Gateway:
                 q.put_nowait(line)
             except asyncio.QueueFull:
                 logger.warning("Dropping event for a slow SSE subscriber")
+                attributes = {"platform": PLATFORM, "reason": "slow_subscriber"}
+                instruments.events_dropped.add(1, attributes)
 
     def add_subscriber(self) -> asyncio.Queue[str | None]:
         """Register a new SSE subscriber queue."""
@@ -342,6 +422,16 @@ class Gateway:
         for q in list(self._subscribers):
             with contextlib.suppress(asyncio.QueueFull):
                 q.put_nowait(None)
+
+
+def _counted_kind(event: Event) -> str | None:
+    """The kind a new message or a reaction counts as; None for anything else."""
+    if isinstance(event, MessageEvent) and not event.edited:
+        share = event.share is not None
+        return instruments.message_kind(event.item_type, event.media_path, share=share)
+    if isinstance(event, ReactionEvent):
+        return "reaction"
+    return None
 
 
 gateway: Gateway | None = None

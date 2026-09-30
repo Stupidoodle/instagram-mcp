@@ -22,6 +22,10 @@ class EventLog:
         self._seq = 0
         self._frames: deque[tuple[int, str]] = deque(maxlen=keep)
 
+    def __len__(self) -> int:
+        """How many frames are kept for replay."""
+        return len(self._frames)
+
     def record(self, data: str) -> str:
         """Number an event's JSON and keep its frame; returns the frame to send."""
         self._seq += 1
