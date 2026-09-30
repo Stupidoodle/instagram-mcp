@@ -20,6 +20,9 @@ Environment=OTEL_LOGS_EXPORTER=none
 ExecStart=%h/.local/bin/uv run --frozen instagram-bridge
 Restart=always
 RestartSec=5
+# uvicorn shuts down cleanly on SIGTERM and then re-raises the signal, so `uv run`
+# exits 143: that is a normal stop, not a failure.
+SuccessExitStatus=143
 
 [Install]
 WantedBy=default.target
