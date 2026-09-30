@@ -4,13 +4,18 @@ This module handles loading and validating configuration from environment
 variables using pydantic-settings.
 """
 
-import logging
+import sys
 import tempfile
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, TextIO
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from instagram_mcp import logs, telemetry
+
+if TYPE_CHECKING:
+    import logging
 
 
 class Settings(BaseSettings):
@@ -152,26 +157,26 @@ def get_settings() -> Settings:
     return Settings()
 
 
-def setup_logging(level: str = "INFO") -> logging.Logger:
-    """Configure logging to write to stderr (required for MCP servers).
+def setup_logging(
+    level: str = "INFO", *, service: str = telemetry.MCP, stream: TextIO | None = None
+) -> logging.Logger:
+    """Write JSON log lines to stderr, or ``stream`` (the bridge uses stdout).
 
-    MCP servers communicate over stdio, so all logging must go to stderr
-    to avoid corrupting the JSON-RPC protocol.
+    MCP servers talk JSON-RPC over stdout, so an MCP server must log to stderr.
+    When telemetry installed a logger provider, records also go out over OTLP.
 
     Args:
-        level: Logging level (DEBUG, INFO, WARNING, ERROR).
+        level: Logging level of this package (DEBUG, INFO, WARNING, ERROR).
+        service: The ``service`` field of every line.
+        stream: Where the lines go; stderr when None.
 
     Returns:
-        logging.Logger: Configured logger instance for the package.
+        logging.Logger: The package logger.
     """
-    logger = logging.getLogger("instagram_mcp")
-    logger.setLevel(getattr(logging, level))
-
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setLevel(getattr(logging, level))
-        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-
-    return logger
+    providers = telemetry.installed()
+    return logs.setup(
+        level,
+        service=service,
+        stream=stream or sys.stderr,
+        provider=providers.logger if providers else None,
+    )
