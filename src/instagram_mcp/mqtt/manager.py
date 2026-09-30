@@ -113,8 +113,7 @@ class MQTTManager:
             since_ping = now - self._pingreq_sent_at
             if since_ping > _PINGREQ_RESPONSE_TIMEOUT:
                 logger.warning(
-                    "MQTT stale: PINGREQ sent %.0fs ago with no response",
-                    since_ping,
+                    "MQTT stale: no answer to PINGREQ", extra={"seconds": round(since_ping)}
                 )
                 return False
 
@@ -122,7 +121,7 @@ class MQTTManager:
         if self._last_packet_time > 0:
             silence = now - self._last_packet_time
             if silence > _STALE_TIMEOUT:
-                logger.warning("MQTT stale: no packets for %.0fs", silence)
+                logger.warning("MQTT stale: no packets", extra={"seconds": round(silence)})
                 return False
 
         return True
@@ -237,7 +236,9 @@ class MQTTManager:
                 "subscription_type": "message",
             },
         )
-        logger.info("Subscribed to Iris (seq_id=%d, snapshot_at_ms=%d)", seq_id, snapshot_at_ms)
+        logger.info(
+            "Subscribed to Iris", extra={"seq_id": seq_id, "snapshot_at_ms": snapshot_at_ms}
+        )
 
         # Start background reader
         self._stop_event.clear()
@@ -285,10 +286,7 @@ class MQTTManager:
                 # Wait briefly for reader to stabilize
                 time.sleep(1)
                 self._reconnect_count += 1
-                logger.info(
-                    "MQTT reconnected successfully (reconnect #%d)",
-                    self._reconnect_count,
-                )
+                logger.info("MQTT reconnected", extra={"reconnects": self._reconnect_count})
                 return True
             except Exception:
                 logger.exception("MQTT reconnect failed")
@@ -337,10 +335,11 @@ class MQTTManager:
                         since_ping = now - self._pingreq_sent_at
                         if since_ping > _PINGREQ_RESPONSE_TIMEOUT:
                             logger.warning(
-                                "MQTT stale: sent PINGREQ %.0fs ago, no response. "
-                                "Last packet %.0fs ago. Closing.",
-                                since_ping,
-                                now - self._last_packet_time,
+                                "MQTT stale: no answer to PINGREQ, closing",
+                                extra={
+                                    "seconds": round(since_ping),
+                                    "since_packet_s": round(now - self._last_packet_time),
+                                },
                             )
                             self._conn.disconnect()
                             break
@@ -348,8 +347,8 @@ class MQTTManager:
                     # Blanket stale detection (fallback, ~90s)
                     if now - self._last_packet_time > _STALE_TIMEOUT:
                         logger.warning(
-                            "MQTT stale: no packets for %.0fs, closing",
-                            now - self._last_packet_time,
+                            "MQTT stale: no packets, closing",
+                            extra={"seconds": round(now - self._last_packet_time)},
                         )
                         self._conn.disconnect()
                         break
@@ -364,9 +363,8 @@ class MQTTManager:
                         self._handle_publish(first_byte, body)
                     except Exception:
                         logger.warning(
-                            "Failed to handle PUBLISH (topic byte %d, %d bytes)",
-                            first_byte,
-                            len(body),
+                            "Failed to handle an MQTT PUBLISH",
+                            extra={"first_byte": first_byte, "bytes": len(body)},
                             exc_info=True,
                         )
                 elif ptype == PINGREQ:
@@ -381,7 +379,9 @@ class MQTTManager:
                         else 0,
                     )
                 else:
-                    logger.info("MQTT packet type=%d (%dB)", ptype, len(body))
+                    logger.info(
+                        "Unhandled MQTT packet", extra={"packet_type": ptype, "bytes": len(body)}
+                    )
         except Exception:
             logger.exception("MQTT reader loop crashed")
 
@@ -390,7 +390,7 @@ class MQTTManager:
     def _handle_publish(self, first_byte: int, body: bytes) -> None:
         """Parse a PUBLISH packet and deliver events to subscribers."""
         topic, packet_id, payload = parse_publish_packet(first_byte, body)
-        logger.info("MQTT PUBLISH received: topic=%s (%dB)", topic, len(payload))
+        logger.info("MQTT PUBLISH received", extra={"topic": topic, "bytes": len(payload)})
         _debug_log(f"PUBLISH\ttopic={topic}\tlen={len(payload)}")
 
         if packet_id is not None:
@@ -411,7 +411,7 @@ class MQTTManager:
             try:
                 listener(event)
             except Exception:
-                logger.exception("MQTT listener failed on %s", type(event).__name__)
+                logger.exception("MQTT listener failed", extra={"event": type(event).__name__})
 
     def _publish(self, topic_id: int, payload: dict) -> None:
         """Publish to an MQTT topic with auto-incrementing packet ID."""

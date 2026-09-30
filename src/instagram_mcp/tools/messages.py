@@ -48,7 +48,7 @@ def register_message_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
             fetch_total = offset + amount
             all_messages = bridge.messages(thread_id, amount=fetch_total)
         except Exception as e:
-            logger.exception("Error getting messages for thread %s", thread_id)
+            logger.exception("Error getting messages")
             return {"error": str(e), "thread_id": thread_id}
         page = all_messages[offset : offset + amount]
         has_more = len(all_messages) >= fetch_total
@@ -97,7 +97,7 @@ def register_message_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
             fetch_total = offset + amount
             all_messages = bridge.messages(thread_id, amount=fetch_total)
         except Exception as e:
-            logger.exception("Error getting chat log for thread %s", thread_id)
+            logger.exception("Error getting a chat log")
             return {"error": str(e), "thread_id": thread_id}
         page = all_messages[offset : offset + amount]
         has_more = len(all_messages) >= fetch_total

@@ -182,7 +182,7 @@ class Gateway:
                 snapshot_at_ms=iris["snapshot_at_ms"],
                 app_version=iris["app_version"],
             )
-            logger.info("Instagram gateway connected (seq_id=%d)", iris["seq_id"])
+            logger.info("Instagram gateway connected", extra={"seq_id": iris["seq_id"]})
         except Exception:
             logger.warning("MQTT connect failed; watchdog will keep retrying", exc_info=True)
         self.mqtt.start_watchdog()
@@ -301,7 +301,7 @@ class Gateway:
                 logger.warning("Sweeping view-once downloads failed", exc_info=True)
             else:
                 if removed:
-                    logger.info("Deleted %d expired view-once download(s)", removed)
+                    logger.info("Deleted expired view-once downloads", extra={"count": removed})
             await asyncio.sleep(60)
 
     async def _transcribe(self, path: Path) -> str:
@@ -765,7 +765,7 @@ def main() -> None:
     setup_logging(settings.log_level, service=BRIDGE, stream=sys.stdout)
     host = settings.instagram_bridge_host
     port = settings.instagram_bridge_port
-    logger.info("Starting Instagram bridge on %s:%d", host, port)
+    logger.info("Starting Instagram bridge", extra={"host": host, "port": port})
     config = uvicorn.Config(
         build_app(),
         host=host,
@@ -781,7 +781,10 @@ def main() -> None:
     try:
         server.run()
     except (AuthenticationError, SessionError) as e:
-        logger.error("Instagram auth failed: %s. Run instagram-mcp-login first.", e)
+        logger.error(
+            "Instagram auth failed; run instagram-mcp-login first",
+            extra={"error_type": type(e).__name__},
+        )
         raise
     finally:
         shutdown_telemetry()

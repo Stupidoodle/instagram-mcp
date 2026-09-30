@@ -148,7 +148,7 @@ class CatchUp:
             try:
                 items = self._history(thread_id, self._amount)
             except Exception:
-                logger.warning("Could not catch up on …%s", thread_id[-4:], exc_info=True)
+                logger.warning("Could not catch up on a chat", exc_info=True)
                 continue
             events = sorted(
                 (e for item in items if (e := history_event(thread_id, item)) is not None),
@@ -164,7 +164,7 @@ class CatchUp:
                     self.deliver(event, None)
                     sent += 1
         if sent:
-            logger.info("Caught up on %d message(s) from history", sent)
+            logger.info("Caught up from history", extra={"count": sent})
         return sent
 
 

@@ -59,8 +59,8 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     self_user_id = _bridge.self_user_id()
     if not self_user_id:
         logger.warning(
-            "Bridge %s not reachable yet; the event stream and tools will connect when it is.",
-            settings.instagram_bridge_url,
+            "Bridge not reachable yet; the event stream and tools connect when it is",
+            extra={"bridge_url": settings.instagram_bridge_url},
         )
 
     _channel = Channel(
@@ -77,7 +77,10 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         try:
             _channel.subscribe(thread_id, alias)
         except ChannelError as e:
-            logger.warning("Skipping INSTAGRAM_SUBSCRIBE entry %s: %s", thread_id, e)
+            logger.warning(
+                "Skipping an INSTAGRAM_SUBSCRIBE entry",
+                extra={"alias": alias, "error_type": type(e).__name__},
+            )
     if settings.instagram_control_thread:
         _channel.subscribe(settings.instagram_control_thread, "control")
 
@@ -106,7 +109,9 @@ def create_server(settings: Settings | None = None) -> MCPServer:
     register_message_tools(_mcp, _bridge)
     register_media_tools(_mcp, _bridge)
 
-    logger.info("Instagram MCP thin client ready (bridge=%s)", settings.instagram_bridge_url)
+    logger.info(
+        "Instagram MCP thin client ready", extra={"bridge_url": settings.instagram_bridge_url}
+    )
     return _mcp
 
 

@@ -265,7 +265,7 @@ class Channel:
                 final = self._derive_alias(thread_id, title)
             self._chats[thread_id] = _Chat(thread_id, final, title, names)
             self._aliases[final] = thread_id
-        logger.info("Subscribed thread …%s as %r", thread_id[-4:], final)
+        logger.info("Subscribed a chat", extra={"alias": final})
         return final
 
     def unsubscribe(self, to: str) -> str:
@@ -508,7 +508,7 @@ class Channel:
         try:
             return self._describe_thread(thread_id)
         except Exception:
-            logger.warning("Could not describe thread …%s", thread_id[-4:], exc_info=True)
+            logger.warning("Could not describe a thread", exc_info=True)
             return "", {}
 
     def _derive_alias(self, thread_id: str, title: str) -> str:
@@ -548,7 +548,7 @@ class Channel:
             self._loop.create_task(self._send(content, meta, on_sent))
         if self._idle_task is None or self._idle_task.done():
             self._idle_task = self._loop.create_task(self._idle_heartbeat())
-        logger.info("Channel attached (%d subscriptions)", len(self._chats))
+        logger.info("Channel attached", extra={"subscriptions": len(self._chats)})
 
     def _emit(
         self, content: str, meta: dict[str, str], on_sent: Callable[[], None] | None = None
@@ -646,7 +646,7 @@ def _zone(tz: str | None) -> ZoneInfo | None:
     try:
         return ZoneInfo(tz)
     except ZoneInfoNotFoundError, ValueError:
-        logger.warning("Unknown time zone %r, using the host zone", tz)
+        logger.warning("Unknown time zone, using the host zone", extra={"tz": tz})
         return None
 
 

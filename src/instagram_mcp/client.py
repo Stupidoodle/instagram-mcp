@@ -387,7 +387,10 @@ class InstagramClient:
             return False
         self.client.set_app(self._app_version)
         self.client.set_user_agent()
-        logger.info("Instagram app version %s -> %s", current or "(none)", self._app_version)
+        logger.info(
+            "Instagram app version changed",
+            extra={"from_version": current or "(none)", "to_version": self._app_version},
+        )
         return True
 
     def _retry_on_rate_limit(self, operation: Any, *args: Any, **kwargs: Any) -> Any:
@@ -412,18 +415,19 @@ class InstagramClient:
                 attempt += 1
                 if attempt > max_retries:
                     logger.error(
-                        "Max retries (%d) exceeded: %s",
-                        max_retries,
-                        e,
+                        "Instagram request failed after retries",
+                        extra={"retries": max_retries, "error_type": type(e).__name__},
                     )
                     raise
                 backoff = min(2 ** (attempt - 1), max_delay)
                 logger.warning(
-                    "Rate limited/timeout, retry in %.0fs (attempt %d/%d): %s",
-                    backoff,
-                    attempt,
-                    max_retries,
-                    e,
+                    "Rate limited or timed out; retrying",
+                    extra={
+                        "backoff_s": backoff,
+                        "attempt": attempt,
+                        "retries": max_retries,
+                        "error_type": type(e).__name__,
+                    },
                 )
                 time.sleep(backoff)
 
@@ -485,7 +489,7 @@ class InstagramClient:
             settings = self.client.get_settings()
             self.session_file.write_text(json.dumps(settings, indent=2, default=str))
             self.session_file.chmod(0o600)  # Secure permissions
-            logger.info("Session saved to %s", self.session_file)
+            logger.info("Session saved", extra={"session_file": str(self.session_file)})
         except (OSError, TypeError) as e:
             raise SessionError(f"Failed to save session: {e}") from e
 
@@ -509,7 +513,7 @@ class InstagramClient:
             self.client.login(username, password)
             self._logged_in = True
             self.save_session()
-            logger.info("Login successful for user %s", username)
+            logger.info("Login successful")
         except BadPassword as e:
             raise AuthenticationError("Invalid password") from e
         except TwoFactorRequired as e:
