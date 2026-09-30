@@ -1,6 +1,7 @@
 """Unit tests for configuration management."""
 
 import logging
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -8,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from instagram_mcp.config import Settings, get_settings, setup_logging
+from instagram_mcp.logs import JsonFormatter, _OwnedStream
 
 
 class TestSettings:
@@ -108,6 +110,7 @@ class TestGetSettings:
         assert settings.instagram_username == "test_user"
 
 
+@pytest.mark.usefixtures("restore_logging")
 class TestSetupLogging:
     def test_setup_logging_default(self) -> None:
         logger = setup_logging()
@@ -131,12 +134,12 @@ class TestSetupLogging:
         assert logger.level == logging.ERROR
 
     def test_setup_logging_has_handler(self) -> None:
-        logger = setup_logging()
+        setup_logging()
 
-        assert len(logger.handlers) >= 1
-        # Handler should write to stderr, not stdout
-        handler = logger.handlers[0]
-        assert isinstance(handler, logging.StreamHandler)
+        # One JSON handler on the root logger, writing to stderr, not stdout
+        (handler,) = [h for h in logging.getLogger().handlers if isinstance(h, _OwnedStream)]
+        assert handler.stream is sys.stderr
+        assert isinstance(handler.formatter, JsonFormatter)
 
 
 class TestSubscriptions:

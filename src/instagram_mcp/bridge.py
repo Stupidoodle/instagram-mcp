@@ -57,7 +57,12 @@ from instagram_mcp.mqtt.events import (
 )
 from instagram_mcp.mqtt.manager import MQTTManager
 from instagram_mcp.seen_log import SeenLog
-from instagram_mcp.telemetry import bridge_identity, configure_telemetry, shutdown_telemetry
+from instagram_mcp.telemetry import (
+    BRIDGE,
+    bridge_identity,
+    configure_telemetry,
+    shutdown_telemetry,
+)
 from instagram_mcp.video import VIDEO_SUFFIXES, duration, frame_strip, has_audio, to_m4a
 
 if TYPE_CHECKING:
@@ -757,7 +762,7 @@ def main() -> None:
     """Entry point for `uv run instagram-bridge`."""
     settings = get_settings()
     configure_telemetry(bridge_identity())
-    setup_logging(settings.log_level)
+    setup_logging(settings.log_level, service=BRIDGE, stream=sys.stdout)
     host = settings.instagram_bridge_host
     port = settings.instagram_bridge_port
     logger.info("Starting Instagram bridge on %s:%d", host, port)
@@ -766,6 +771,10 @@ def main() -> None:
         host=host,
         port=port,
         log_level=settings.log_level.lower(),
+        # uvicorn's lines go through the JSON handler; no access log, whose request
+        # lines carry thread ids in the query (HTTP spans and metrics replace it).
+        log_config=None,
+        access_log=False,
         timeout_graceful_shutdown=5,  # backstop for a client that won't let go
     )
     server = BridgeServer(config)

@@ -9,6 +9,7 @@ instagrapi-shaped fixtures below are kept for it.
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
@@ -63,6 +64,17 @@ def _install_telemetry() -> Telemetry:
 
 
 _TELEMETRY = _install_telemetry()
+
+
+@pytest.fixture
+def restore_logging() -> Iterator[None]:
+    """Put the root and package loggers back the way the test found them."""
+    root, package = logging.getLogger(), logging.getLogger("instagram_mcp")
+    handlers, level, package_level = root.handlers[:], root.level, package.level
+    yield
+    root.handlers[:] = handlers
+    root.setLevel(level)
+    package.setLevel(package_level)
 
 
 @pytest.fixture
