@@ -9,7 +9,16 @@ from message content, names or ids.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
 from opentelemetry import metrics
+from opentelemetry.metrics import Observation
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable
+
+    from opentelemetry.metrics import CallbackOptions
 
 PLATFORM = "instagram"
 
@@ -25,3 +34,41 @@ http_server_duration = meter.create_histogram(
     explicit_bucket_boundaries_advisory=HTTP_BUCKETS,
 )
 """Attributes: http.request.method, http.route, http.response.status_code, error.type."""
+
+
+@dataclass
+class Sources:
+    """What the observable gauges read, set by the process that owns the state."""
+
+    bridge_connected: Callable[[], bool] | None = None
+
+
+sources = Sources()
+
+
+# ── Bridge: the MQTT connection ─────────────────────────────────────────────
+
+connection_events = meter.create_counter(
+    "dm.bridge.connection.events",
+    unit="{event}",
+    description="MQTT connection events: connected, disconnected, reconnect, "
+    "connect_failed, stream_error.",
+)
+
+
+def connection_event(event: str) -> None:
+    """Count one MQTT connection event (a closed value, see ``connection_events``)."""
+    connection_events.add(1, {"platform": PLATFORM, "event": event})
+
+
+def _bridge_connected(_options: CallbackOptions) -> Iterable[Observation]:
+    probe = sources.bridge_connected
+    return [] if probe is None else [Observation(int(probe()), {"platform": PLATFORM})]
+
+
+meter.create_observable_gauge(
+    "dm.bridge.connected",
+    callbacks=[_bridge_connected],
+    unit="{connection}",
+    description="1 while the MQTT connection is up, else 0.",
+)

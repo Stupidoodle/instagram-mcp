@@ -36,6 +36,7 @@ from starlette.middleware import Middleware
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
+from instagram_mcp import instruments
 from instagram_mcp.client import (
     AuthenticationError,
     InstagramClient,
@@ -165,6 +166,7 @@ class Gateway:
             password=self.settings.instagram_password.get_secret_value(),
         )
         self.self_user_id = str(self.client.client.user_id or "")
+        instruments.sources.bridge_connected = self.mqtt_connected
         self._media = InboundMedia(
             self_user_id=self.self_user_id,
             download=self._download_media,
@@ -188,6 +190,10 @@ class Gateway:
         except Exception:
             logger.warning("MQTT connect failed; watchdog will keep retrying", exc_info=True)
         self.mqtt.start_watchdog()
+
+    def mqtt_connected(self) -> bool:
+        """Whether the MQTT connection is up."""
+        return self.mqtt is not None and self.mqtt.is_connected
 
     def stop(self) -> None:
         """Disconnect the MQTT connection (called on app shutdown)."""
@@ -406,8 +412,9 @@ def _err(message: str, code: int = 400) -> JSONResponse:
 async def health(_request: Request) -> JSONResponse:
     """Liveness plus the logged-in user id and MQTT status."""
     g = gw()
-    connected = g.mqtt is not None and g.mqtt.is_connected
-    return JSONResponse({"ok": True, "self_user_id": g.self_user_id, "mqtt_connected": connected})
+    return JSONResponse(
+        {"ok": True, "self_user_id": g.self_user_id, "mqtt_connected": g.mqtt_connected()}
+    )
 
 
 async def send(request: Request) -> JSONResponse:

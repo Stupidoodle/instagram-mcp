@@ -17,6 +17,8 @@ import zlib
 
 import certifi
 
+from instagram_mcp import instruments
+
 logger = logging.getLogger("instagram_mcp.mqtt")
 
 # MQTT packet types
@@ -96,20 +98,21 @@ class MQTToTConnection:
         self._sock.settimeout(10)
         result = self.read_packet()
         if result is None:
-            self.disconnect()
+            self._close()
             raise RuntimeError("No CONNACK received")
 
         ptype, _flags, body = result
         if ptype != CONNACK:
-            self.disconnect()
+            self._close()
             raise RuntimeError(f"Expected CONNACK, got packet type {ptype}")
 
         rc = body[1] if len(body) >= 2 else -1
         if rc != 0:
-            self.disconnect()
+            self._close()
             raise RuntimeError(f"CONNACK rejected: rc={rc}")
 
         logger.info("MQTT connected (rc=0)")
+        instruments.connection_event("connected")
         return rc
 
     def publish(
@@ -160,9 +163,9 @@ class MQTToTConnection:
         try:
             header = self._sock.recv(1)
             if not header:
-                # Remote end closed the connection — mark socket dead immediately
+                # Remote end closed the connection: mark the socket dead immediately
                 logger.debug("recv returned empty bytes, connection closed by remote")
-                self._sock = None
+                self._lost()
                 return None
             first_byte = header[0]
             ptype = (first_byte >> 4) & 0x0F
@@ -174,7 +177,7 @@ class MQTToTConnection:
                 byte_data = self._sock.recv(1)
                 if not byte_data:
                     logger.debug("Connection closed mid-packet (remaining length)")
-                    self._sock = None
+                    self._lost()
                     return None
                 remaining += (byte_data[0] & 0x7F) * multiplier
                 multiplier *= 128
@@ -187,7 +190,7 @@ class MQTToTConnection:
                 chunk = self._sock.recv(remaining - len(body))
                 if not chunk:
                     logger.debug("Connection closed mid-packet (body)")
-                    self._sock = None
+                    self._lost()
                     break
                 body.extend(chunk)
 
@@ -214,13 +217,25 @@ class MQTToTConnection:
 
     def disconnect(self) -> None:
         """Send DISCONNECT and close the socket."""
-        if self._sock:
-            with contextlib.suppress(OSError):
-                self._sock.sendall(b"\xe0\x00")  # DISCONNECT
-            with contextlib.suppress(OSError):
-                self._sock.close()
-            self._sock = None
+        if self._close():
             logger.info("MQTT disconnected")
+            instruments.connection_event("disconnected")
+
+    def _close(self) -> bool:
+        """Send DISCONNECT and close the socket, uncounted; whether one was open."""
+        if not self._sock:
+            return False
+        with contextlib.suppress(OSError):
+            self._sock.sendall(b"\xe0\x00")  # DISCONNECT
+        with contextlib.suppress(OSError):
+            self._sock.close()
+        self._sock = None
+        return True
+
+    def _lost(self) -> None:
+        """The remote end closed the connection: the socket is dead."""
+        self._sock = None
+        instruments.connection_event("disconnected")
 
     def set_timeout(self, timeout: float) -> None:
         """Set socket read timeout."""
