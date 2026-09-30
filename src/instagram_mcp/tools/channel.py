@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from mcp.types import ToolAnnotations
 
+from instagram_mcp import instruments
 from instagram_mcp.channel import ChannelError
 from instagram_mcp.shares import Share, describe
 from instagram_mcp.video import VIDEO_SUFFIXES
@@ -25,6 +26,11 @@ if TYPE_CHECKING:
     from instagram_mcp.channel import Channel
 
 logger = logging.getLogger("instagram_mcp")
+
+
+def sent_out(kind: str) -> None:
+    """Count one message the persona sent (confirmed by the bridge)."""
+    instruments.channel_messages.add(1, instruments.channel_labels(direction="out", kind=kind))
 
 
 def _refused(error: Exception) -> dict[str, Any]:
@@ -102,9 +108,10 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
     def target(to: str | None) -> str:
         return channel.resolve(to)
 
-    def _sent(thread_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    def _sent(thread_id: str, result: dict[str, Any], kind: str) -> dict[str, Any]:
         if not result.get("success"):
             return {"success": False, "error": result.get("error", "not confirmed")}
+        sent_out(kind)
         return {
             "success": True,
             "sent": channel.display(thread_id),
@@ -122,7 +129,7 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
         try:
             thread_id = target(to)
             channel.expect_echo(thread_id, "text", text)
-            return _sent(thread_id, bridge.send(thread_id, text))
+            return _sent(thread_id, bridge.send(thread_id, text), "text")
         except ChannelError as e:
             return _refused(e)
         except Exception as e:
@@ -155,7 +162,8 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
         try:
             thread_id = target(to)
             channel.expect_echo(thread_id, "media")
-            return _sent(thread_id, bridge.send_media(thread_id, file_path, kind, view_mode))
+            result = bridge.send_media(thread_id, file_path, kind, view_mode)
+            return _sent(thread_id, result, "video" if kind == "video" else "image")
         except ChannelError as e:
             return _refused(e)
         except Exception as e:
@@ -175,7 +183,7 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
         try:
             thread_id = target(to)
             channel.expect_echo(thread_id, "media")
-            return _sent(thread_id, bridge.send_voice(thread_id, file_path))
+            return _sent(thread_id, bridge.send_voice(thread_id, file_path), "audio")
         except ChannelError as e:
             return _refused(e)
         except Exception as e:
@@ -351,4 +359,5 @@ def register_messaging_tools(mcp: MCPServer, bridge: BridgeClient, channel: Chan
         ok = result.get("success", False)
         if ok:
             channel.remember_reaction(thread_id, message_id, emoji)
+            sent_out("reaction")
         return {"success": ok}

@@ -37,6 +37,7 @@ from mcp.types import (
 )
 from mcp.types.version import MODERN_PROTOCOL_VERSIONS
 
+from instagram_mcp import instruments
 from instagram_mcp.mqtt.events import (
     MessageEvent,
     ReactionEvent,
@@ -335,6 +336,10 @@ class Channel:
             chat.last_nudge = None
             chat.nudge_interval = None
 
+    def queue_depths(self) -> dict[str, int]:
+        """Pushes held until Claude Code attaches."""
+        return {"pending": len(self._pending)}
+
     @property
     def idle_minutes(self) -> float:
         """The default idle threshold in minutes."""
@@ -410,6 +415,11 @@ class Channel:
             chat.nudge_interval = None
             if their_message:
                 chat.idle_override = None  # their message resets set_idle
+        if their_message:
+            assert isinstance(event, MessageEvent)
+            share = event.share is not None
+            kind = instruments.message_kind(event.item_type, event.media_path, share=share)
+            on_sent = _counted(on_sent, kind)
         self._emit(content, meta, on_sent)
 
     def _build(self, chat: _Chat, event: Event) -> tuple[str, dict[str, str]] | None:  # noqa: PLR0911
@@ -571,12 +581,16 @@ class Channel:
         )
         # ServerSession's typed union has no vendor notifications; it only needs
         # a model with method + params and writes it to the standalone stream.
+        labels = {"type": notification_type(meta)}
         try:
             await session.send_notification(cast("ServerNotification", notification))
         except Exception:
             # Not written, so not counted: catch-up replays it on the next connect.
             logger.warning("Could not push to Claude Code", exc_info=True)
+            outcome = instruments.channel_labels(outcome="error", **labels)
+            instruments.channel_notifications.add(1, outcome)
             return
+        instruments.channel_notifications.add(1, instruments.channel_labels(outcome="ok", **labels))
         if on_sent is not None:
             try:
                 on_sent()
@@ -638,6 +652,41 @@ class Channel:
 
     def _clock(self) -> str:
         return datetime.now(self._tz).strftime("%a, %d/%m/%Y, %H:%M %Z")
+
+
+# A notification's ``event_type`` meta -> the contract's notification type.
+_NOTIFICATION_TYPES = {
+    "edit": "message",
+    "reaction": "reaction",
+    "read": "receipt",
+    "typing": "typing",
+    "typing_stopped": "typing",
+    "idle": "idle",
+}
+
+
+def notification_type(meta: dict[str, str]) -> str:
+    """What a notification is, as a closed value.
+
+    A message is ``media_failed`` when its media could not be fetched; notices,
+    operator commands and unsends are ``other``.
+    """
+    event_type = meta.get("event_type")
+    if event_type is None:
+        return "media_failed" if "media_error" in meta else "message"
+    return _NOTIFICATION_TYPES.get(event_type, "other")
+
+
+def _counted(on_sent: Callable[[], None] | None, kind: str) -> Callable[[], None]:
+    """``on_sent`` that also counts their message as delivered (it only runs once written)."""
+
+    def sent() -> None:
+        labels = instruments.channel_labels(direction="in", kind=kind)
+        instruments.channel_messages.add(1, labels)
+        if on_sent is not None:
+            on_sent()
+
+    return sent
 
 
 def _zone(tz: str | None) -> ZoneInfo | None:

@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from instagram_mcp.tools.channel import sent_out
+
 if TYPE_CHECKING:
     from mcp.server.mcpserver import MCPServer
 
@@ -29,10 +31,13 @@ def register_media_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
             thread_id: Thread to share it into.
         """
         try:
-            return {**bridge.share_media(media_id, thread_id), "media_id": media_id}
+            result = bridge.share_media(media_id, thread_id)
         except Exception as e:
             logger.exception("Error sharing media")
             return {"error": str(e), "media_id": media_id}
+        if result.get("success"):
+            sent_out("share")
+        return {**result, "media_id": media_id}
 
     @mcp.tool()
     def share_profile(user_id: str, thread_id: str) -> dict[str, Any]:
@@ -43,7 +48,10 @@ def register_media_tools(mcp: MCPServer, bridge: BridgeClient) -> None:
             thread_id: Thread to share it into.
         """
         try:
-            return {**bridge.share_profile(user_id, thread_id), "user_id": user_id}
+            result = bridge.share_profile(user_id, thread_id)
         except Exception as e:
             logger.exception("Error sharing a profile")
             return {"error": str(e), "user_id": user_id}
+        if result.get("success"):
+            sent_out("share")
+        return {**result, "user_id": user_id}

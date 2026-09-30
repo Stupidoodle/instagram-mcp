@@ -49,9 +49,19 @@ class Sources:
     bridge_connected: Callable[[], bool] | None = None
     bridge_sse_clients: Callable[[], int] | None = None
     bridge_queues: Callable[[], Mapping[str, int]] | None = None
+    stream_connected: Callable[[], bool] | None = None
+    channel_queues: Callable[[], Mapping[str, int]] | None = None
 
 
 sources = Sources()
+
+persona = ""
+"""The thin client's persona, set when it starts; a label on every ``dm.channel`` metric."""
+
+
+def channel_labels(**extra: str) -> dict[str, str]:
+    """The labels of a ``dm.channel`` data point: persona, platform and ``extra``."""
+    return {"persona": persona, "platform": PLATFORM, **extra}
 
 
 # ── Closed attribute values ─────────────────────────────────────────────────
@@ -227,3 +237,59 @@ operation_duration = meter.create_histogram(
     explicit_bucket_boundaries_advisory=MCP_BUCKETS,
 )
 """Attributes: mcp.method.name, gen_ai.tool.name, error.type (on error), persona."""
+
+
+# ── Thin client: the channel ────────────────────────────────────────────────
+
+channel_messages = meter.create_counter(
+    "dm.channel.messages",
+    unit="{message}",
+    description="Messages delivered to Claude Code (in) or sent by the persona (out).",
+)
+"""Attributes: persona, platform, direction, kind."""
+
+channel_notifications = meter.create_counter(
+    "dm.channel.notifications",
+    unit="{notification}",
+    description="Channel notifications pushed to Claude Code, by type and outcome.",
+)
+"""Attributes: persona, platform, type, outcome."""
+
+stream_reconnects = meter.create_counter(
+    "dm.channel.stream.reconnects",
+    unit="{reconnect}",
+    description="Times the bridge's event stream dropped and was reopened.",
+)
+"""Attributes: persona, platform, reason (ended error http_status)."""
+
+catchup_events = meter.create_counter(
+    "dm.channel.catchup.events",
+    unit="{event}",
+    description="Events caught up on: replayed by the bridge, or backfilled from history.",
+)
+"""Attributes: persona, platform, mode (replay backfill)."""
+
+
+def _stream_connected(_options: CallbackOptions) -> Iterable[Observation]:
+    probe = sources.stream_connected
+    return [] if probe is None else [Observation(int(probe()), channel_labels())]
+
+
+def _channel_queues(_options: CallbackOptions) -> Iterable[Observation]:
+    probe = sources.channel_queues
+    depths = {} if probe is None else probe()
+    return [Observation(n, channel_labels(queue=q)) for q, n in depths.items()]
+
+
+meter.create_observable_gauge(
+    "dm.channel.stream.connected",
+    callbacks=[_stream_connected],
+    unit="{connection}",
+    description="1 while the event stream from the bridge is open, else 0.",
+)
+meter.create_observable_gauge(
+    "dm.channel.queue.depth",
+    callbacks=[_channel_queues],
+    unit="{item}",
+    description="Items waiting: pending (pushes held until Claude Code attaches).",
+)

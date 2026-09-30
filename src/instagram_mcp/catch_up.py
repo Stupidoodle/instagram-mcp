@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from instagram_mcp import instruments
 from instagram_mcp.mqtt.events import MessageEvent
 from instagram_mcp.shares import Share
 
@@ -165,6 +166,7 @@ class CatchUp:
                     sent += 1
         if sent:
             logger.info("Caught up from history", extra={"count": sent})
+            instruments.catchup_events.add(sent, instruments.channel_labels(mode="backfill"))
         return sent
 
 
