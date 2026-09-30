@@ -23,6 +23,7 @@ from instagram_mcp.video import VIDEO_SUFFIXES
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Mapping
 
+    from opentelemetry.context import Context
     from opentelemetry.metrics import CallbackOptions
     from opentelemetry.trace import Span
     from opentelemetry.util.types import Attributes
@@ -102,10 +103,12 @@ def span(
     *,
     kind: SpanKind = SpanKind.INTERNAL,
     attributes: Attributes = None,
+    context: Context | None = None,
 ) -> Iterator[Span]:
     """A current span that records a failure as its error class, never the exception text."""
     with tracer.start_as_current_span(
         name,
+        context=context,
         kind=kind,
         attributes=attributes,
         record_exception=False,

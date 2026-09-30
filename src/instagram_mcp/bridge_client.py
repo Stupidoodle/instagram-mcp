@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import httpx2
+from opentelemetry.propagate import extract, inject
+from opentelemetry.trace import SpanKind
 
 from instagram_mcp import instruments
 from instagram_mcp.mqtt.events import (
@@ -127,9 +129,16 @@ class BridgeClient:
     sync httpx client is the natural fit.
     """
 
-    def __init__(self, base_url: str, timeout: float = 60.0) -> None:
+    def __init__(
+        self, base_url: str, timeout: float = 60.0, *, transport: httpx2.BaseTransport | None = None
+    ) -> None:
         self.base_url = base_url.rstrip("/")
-        self._http = httpx2.Client(base_url=self.base_url, timeout=timeout)
+        self._http = httpx2.Client(
+            base_url=self.base_url,
+            timeout=timeout,
+            transport=transport,
+            event_hooks={"request": [_inject_trace]},
+        )
 
     def close(self) -> None:
         """Close the underlying HTTP client."""
@@ -268,6 +277,11 @@ class BridgeClient:
         return self._get("/pending").get("threads", [])
 
 
+def _inject_trace(request: httpx2.Request) -> None:
+    """Every command and read carries the caller's trace (a tool call's span) to the bridge."""
+    inject(request.headers)
+
+
 def stream_events(
     base_url: str,
     on_event: Callable[[Event], None],
@@ -364,6 +378,10 @@ def _dispatch(
         payload = json.loads(frame.data)
     except json.JSONDecodeError:
         return
+    if not isinstance(payload, dict):
+        return
+    # The bridge's trace context: continued here, and never passed on to Claude Code.
+    traceparent = payload.pop("traceparent", None)
     if frame.event == "hello":
         if hello is not None:
             hello.boot, hello.seq = payload.get("boot"), int(payload.get("seq") or 0)
@@ -373,12 +391,26 @@ def _dispatch(
     event = event_from_dict(payload)
     if event is None:
         return
-    if hello is not None and hello.replayed(frame.id):
+    delivery = "replay" if hello is not None and hello.replayed(frame.id) else "live"
+    if delivery == "replay":
         instruments.catchup_events.add(1, instruments.channel_labels(mode="replay"))
-    try:
-        if catch_up is not None:
-            catch_up.deliver(event, frame.id)
-        else:
-            on_event(event)
-    except Exception:
-        logger.exception("Channel handler failed", extra={"event": type(event).__name__})
+    attributes = {
+        "dm.platform": instruments.PLATFORM,
+        "dm.persona": instruments.persona,
+        "dm.event.type": str(payload.get("type")),
+        "dm.delivery": delivery,
+    }
+    if payload.get("item_id"):
+        attributes["messaging.message.id"] = str(payload["item_id"])
+    parent = extract({"traceparent": traceparent}) if isinstance(traceparent, str) else None
+    consumer = SpanKind.CONSUMER
+    with instruments.span(
+        "dm.channel.deliver", kind=consumer, attributes=attributes, context=parent
+    ):
+        try:
+            if catch_up is not None:
+                catch_up.deliver(event, frame.id)
+            else:
+                on_event(event)
+        except Exception:
+            logger.exception("Channel handler failed", extra={"event": type(event).__name__})
