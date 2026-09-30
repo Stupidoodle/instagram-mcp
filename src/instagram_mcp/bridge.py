@@ -32,6 +32,7 @@ import httpx2
 import uvicorn
 from starlette.applications import Starlette
 from starlette.concurrency import run_in_threadpool
+from starlette.middleware import Middleware
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
@@ -46,6 +47,7 @@ from instagram_mcp.client import (
 from instagram_mcp.config import get_settings, setup_logging
 from instagram_mcp.ephemeral import sweep
 from instagram_mcp.event_log import EventLog
+from instagram_mcp.http_telemetry import HttpServerTelemetry
 from instagram_mcp.media import InboundMedia
 from instagram_mcp.mqtt.events import (
     MessageEvent,
@@ -741,7 +743,10 @@ def build_app() -> Starlette:
         finally:
             gateway.stop()
 
-    return Starlette(routes=routes, lifespan=lifespan)
+    # The SSE stream is left out of the request spans and durations: it lasts as long
+    # as its client (dm.bridge.sse.clients counts those).
+    telemetry = Middleware(HttpServerTelemetry, exclude={"/events"})
+    return Starlette(routes=routes, lifespan=lifespan, middleware=[telemetry])
 
 
 class BridgeServer(uvicorn.Server):
