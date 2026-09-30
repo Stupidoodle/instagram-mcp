@@ -35,6 +35,9 @@ HTTP_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 3
 SEND_BUCKETS = (0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 120.0)
 """Seconds: one platform send, or one media download (with its transcription)."""
 
+MCP_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0, 120.0)
+"""Seconds: one MCP request to the thin client (a tool call, a list)."""
+
 meter = metrics.get_meter("instagram_mcp")
 tracer = trace.get_tracer("instagram_mcp")
 
@@ -213,3 +216,14 @@ meter.create_observable_gauge(
     description="Items waiting: media (events held for their download), "
     "sse_backlog (frames queued for subscribers), event_log (frames kept for replay).",
 )
+
+
+# ── Thin client: MCP ────────────────────────────────────────────────────────
+
+operation_duration = meter.create_histogram(
+    "mcp.server.operation.duration",
+    unit="s",
+    description="Duration of an MCP request or notification the thin client handled.",
+    explicit_bucket_boundaries_advisory=MCP_BUCKETS,
+)
+"""Attributes: mcp.method.name, gen_ai.tool.name, error.type (on error), persona."""
