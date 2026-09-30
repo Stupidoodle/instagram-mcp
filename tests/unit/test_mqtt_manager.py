@@ -1,6 +1,8 @@
 """Unit tests for MQTTManager."""
 
 import json
+import logging
+import ssl
 import struct
 import threading
 import time
@@ -17,6 +19,8 @@ from instagram_mcp.mqtt.manager import _PINGREQ_RESPONSE_TIMEOUT, _STALE_TIMEOUT
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from tests.support.telemetry import Telemetry
 
 
 def _make_session_file(tmp_path: Path) -> Path:
@@ -514,16 +518,54 @@ class TestMQTTManagerReaderLoopPacketTypes:
         mgr._reader_loop()
         # Loop should have continued past the exception
 
-    def test_reader_loop_crash_logged(self) -> None:
-        """Unhandled exception in reader loop is logged and loop exits."""
+    def test_reader_loop_crash_logged(
+        self, caplog: pytest.LogCaptureFixture, telemetry: Telemetry
+    ) -> None:
+        """Unhandled exception in reader loop is logged at ERROR, counted, and loop exits."""
         mgr = MQTTManager()
         mock_conn = MagicMock()
         mock_conn.is_connected = True
         mgr._conn = mock_conn
+        before = telemetry.total("dm.bridge.connection.events", event="stream_error")
 
         mock_conn.read_packet.side_effect = RuntimeError("catastrophic failure")
-        mgr._reader_loop()
-        # Should not raise — exception is caught and logged
+        with caplog.at_level(logging.INFO, logger="instagram_mcp.mqtt"):
+            mgr._reader_loop()
+
+        assert any(
+            r.levelno == logging.ERROR and r.getMessage() == "MQTT reader loop crashed"
+            for r in caplog.records
+        )
+        after = telemetry.total("dm.bridge.connection.events", event="stream_error")
+        assert after == before + 1
+
+    def test_reader_loop_error_during_close_is_not_a_crash(
+        self, caplog: pytest.LogCaptureFixture, telemetry: Telemetry
+    ) -> None:
+        """A read that fails because disconnect() closed the socket is logged at INFO only."""
+        mgr = MQTTManager()
+        mock_conn = MagicMock()
+        mock_conn.is_connected = True
+        mgr._conn = mock_conn
+        before = telemetry.total("dm.bridge.connection.events", event="stream_error")
+
+        def read_during_close() -> None:
+            mgr._stop_event.set()  # disconnect() sets this before closing the socket
+            raise ssl.SSLError("read on a closed socket")
+
+        mock_conn.read_packet.side_effect = read_during_close
+        with caplog.at_level(logging.INFO, logger="instagram_mcp.mqtt"):
+            mgr._reader_loop()
+
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+        ended = [
+            r for r in caplog.records if r.getMessage() == "MQTT reader loop ended by the close"
+        ]
+        assert ended
+        assert ended[0].exc_info is None
+        assert ended[0].error_type == "SSLError"  # type: ignore[attr-defined]
+        after = telemetry.total("dm.bridge.connection.events", event="stream_error")
+        assert after == before
 
     def test_keepalive_pingreq_sent(self) -> None:
         """Reader loop sends PINGREQ after keepalive interval."""

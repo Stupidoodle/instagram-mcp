@@ -389,9 +389,17 @@ class MQTTManager:
                     logger.info(
                         "Unhandled MQTT packet", extra={"packet_type": ptype, "bytes": len(body)}
                     )
-        except Exception:
-            logger.exception("MQTT reader loop crashed")
-            instruments.connection_event("stream_error")
+        except Exception as exc:
+            if self._stop_event.is_set():
+                # disconnect() or a reconnect closed the socket under a blocking read
+                # (an SSL read during close, typically): a planned stop, not a crash.
+                logger.info(
+                    "MQTT reader loop ended by the close",
+                    extra={"error_type": type(exc).__name__},
+                )
+            else:
+                logger.exception("MQTT reader loop crashed")
+                instruments.connection_event("stream_error")
 
         logger.info("MQTT reader loop stopped")
 
