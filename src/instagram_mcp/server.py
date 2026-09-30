@@ -11,7 +11,8 @@ from __future__ import annotations
 import threading
 from typing import TYPE_CHECKING
 
-from instagram_mcp.bridge_client import BridgeClient, stream_events
+from instagram_mcp import instruments
+from instagram_mcp.bridge_client import BridgeClient, stream_events, stream_status
 from instagram_mcp.catch_up import CatchUp, ChannelState, state_path
 from instagram_mcp.channel import INSTRUCTIONS, Channel, ChannelError, ChannelMCPServer
 from instagram_mcp.config import Settings, get_settings, setup_logging
@@ -55,6 +56,7 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         settings = get_settings()
     identity = persona_identity()
     configure_telemetry(identity)
+    instruments.persona = identity.persona or ""
     logger = setup_logging(settings.log_level)
 
     _bridge = BridgeClient(settings.instagram_bridge_url)
@@ -107,6 +109,8 @@ def create_server(settings: Settings | None = None) -> MCPServer:
         daemon=True,
     ).start()
 
+    instruments.sources.stream_connected = lambda: stream_status.connected
+    instruments.sources.channel_queues = channel.queue_depths
     register_channel_tools(_mcp, _channel)
     register_messaging_tools(_mcp, _bridge, _channel)
     register_thread_tools(_mcp, _bridge)

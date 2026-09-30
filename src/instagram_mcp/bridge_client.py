@@ -13,10 +13,12 @@ from __future__ import annotations
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import httpx2
 
+from instagram_mcp import instruments
 from instagram_mcp.mqtt.events import (
     Event,
     MessageEvent,
@@ -38,6 +40,28 @@ logger = logging.getLogger("instagram_mcp.bridge_client")
 
 class BridgeError(RuntimeError):
     """The bridge was unreachable or returned an error."""
+
+
+class StreamStatus:
+    """Whether the event stream from the bridge is open (read by a gauge)."""
+
+    connected = False
+
+
+stream_status = StreamStatus()
+
+
+@dataclass
+class _Hello:
+    """What a stream's hello frame said: the bridge boot and its newest event then."""
+
+    boot: str | None = None
+    seq: int = 0
+
+    def replayed(self, event_id: str | None) -> bool:
+        """Whether ``event_id`` was replayed (older than the stream) rather than live."""
+        boot, _, seq = (event_id or "").rpartition("-")
+        return boot == self.boot and seq.isdigit() and int(seq) <= self.seq
 
 
 def event_from_dict(d: dict[str, Any]) -> Event | None:  # noqa: PLR0911
@@ -273,14 +297,18 @@ def stream_events(
                 # The response must stay open while it is read: iterate inside the block.
                 resp.raise_for_status()
                 backoff = 1.0
+                stream_status.connected = True
                 logger.info("Connected to bridge events", extra={"bridge_url": base_url})
+                hello = _Hello()
                 for frame in sse_frames(resp.iter_lines()):
                     if stop():
                         return
-                    _dispatch(frame, on_event, catch_up)
-        except Exception:
+                    _dispatch(frame, on_event, catch_up, hello)
+            reason = "ended"
+        except Exception as exc:
             if stop():
                 return
+            reason = "http_status" if isinstance(exc, httpx2.HTTPStatusError) else "error"
             logger.warning(
                 "Bridge event stream dropped; reconnecting",
                 extra={"backoff_s": backoff},
@@ -288,6 +316,9 @@ def stream_events(
             )
             time.sleep(backoff)
             backoff = min(backoff * 2, 30.0)
+        finally:
+            stream_status.connected = False
+        instruments.stream_reconnects.add(1, instruments.channel_labels(reason=reason))
 
 
 class SSEFrame(NamedTuple):
@@ -323,18 +354,27 @@ def sse_frames(lines: Iterable[str]) -> Iterator[SSEFrame]:
         yield SSEFrame(event, event_id, "\n".join(data))
 
 
-def _dispatch(frame: SSEFrame, on_event: Callable[[Event], None], catch_up: CatchUp | None) -> None:
+def _dispatch(
+    frame: SSEFrame,
+    on_event: Callable[[Event], None],
+    catch_up: CatchUp | None,
+    hello: _Hello | None = None,
+) -> None:
     try:
         payload = json.loads(frame.data)
     except json.JSONDecodeError:
         return
     if frame.event == "hello":
+        if hello is not None:
+            hello.boot, hello.seq = payload.get("boot"), int(payload.get("seq") or 0)
         if catch_up is not None and payload.get("gap"):
             catch_up.fill_gap()
         return
     event = event_from_dict(payload)
     if event is None:
         return
+    if hello is not None and hello.replayed(frame.id):
+        instruments.catchup_events.add(1, instruments.channel_labels(mode="replay"))
     try:
         if catch_up is not None:
             catch_up.deliver(event, frame.id)
