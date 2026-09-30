@@ -136,6 +136,40 @@ Now Claude can decide: engage with their "wait" or finish the thought.
 | `INSTAGRAM_EPHEMERAL_DIR` | `$TMPDIR/instagram-ephemeral` | Owner-only folder for view-once and replayable photos |
 | `INSTAGRAM_EPHEMERAL_TTL_MINUTES` | `15` | View-once downloads are deleted this long after download |
 
+### Telemetry
+
+Off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set (and `OTEL_SDK_DISABLED` is not `true`).
+With it, the bridge and every thin client send traces, metrics and logs over OTLP/HTTP to
+that endpoint, under the DM platform's telemetry contract (service namespace `dm`).
+
+| Variable | |
+|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | Base URL, e.g. `http://127.0.0.1:4318` |
+| `OTEL_TRACES_EXPORTER` / `OTEL_METRICS_EXPORTER` / `OTEL_LOGS_EXPORTER` | `none` leaves that signal out |
+| `OTEL_METRIC_EXPORT_INTERVAL` | Milliseconds between metric pushes (SDK default 60000, nexi 15000) |
+| `OTEL_RESOURCE_ATTRIBUTES` | Extra resource attributes, e.g. `deployment.environment.name=prod` |
+| `OTEL_SERVICE_NAME` | Overrides `instagram-bridge` / `instagram-mcp` |
+| `DM_PERSONA_DIR` | Thin client: the persona folder (default: `PWD`) |
+
+The SDK reads these from the process environment (the systemd unit, the `env` of
+`.mcp.json`), not from `.env`.
+
+- **Bridge** (`instagram-bridge`, instance: the hostname): `dm.bridge.*` metrics and
+  `http.server.request.duration`; one `instagram.event <type>` span per MQTT event with the
+  media download and the call to the transcriber inside it; an `instagram.send` span per
+  send. Each SSE event carries its span's `traceparent`. On nexi the unit turns OTLP logs
+  off: the JSON lines on stdout go to the journal.
+- **Thin client** (`instagram-mcp`, instance: the persona folder, `dm.persona`):
+  `dm.channel.*` metrics, `mcp.server.operation.duration`, the MCP SDK's `tools/call <tool>`
+  spans tagged with the persona, and a `dm.channel.deliver` span per event that continues
+  the bridge's trace. It logs JSON to stderr and, when on, over OTLP. Add the variables to
+  the persona's `.mcp.json` `env` and relaunch the session.
+
+Logs are one JSON object per line: `time`, `level`, `msg`, `service`, `trace_id` and
+`span_id` inside a span, then fields such as `message_id`, `kind` or `error_type`. Message
+text, names, usernames, user ids and thread ids never go into telemetry or INFO+ logs; an
+exception logs its class and frames, not its message.
+
 ### E2E tests
 
 The e2e tests message between your account and a second test account. Log the test
