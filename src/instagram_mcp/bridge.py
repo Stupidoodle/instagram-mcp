@@ -494,6 +494,48 @@ async def _json(request: Request) -> dict[str, Any]:
         return {}
 
 
+async def _platform_send[T](
+    kind: str, size: int | None, send_call: Callable[..., T], *args: Any, **kwargs: Any
+) -> T:
+    """Run one instagrapi send on a worker thread in an ``instagram.send`` span, timed.
+
+    A falsy result (no message back, or False) is Instagram not confirming it: an error.
+    """
+    attributes: dict[str, str | int] = {
+        "dm.platform": PLATFORM,
+        "dm.message.kind": kind,
+        "dm.outcome": "error",
+    }
+    if size is not None:
+        attributes["dm.message.bytes"] = size
+    outcome = "error"
+    start = time.perf_counter()
+    try:
+        client = SpanKind.CLIENT
+        with instruments.span("instagram.send", kind=client, attributes=attributes) as span:
+            result = await run_in_threadpool(send_call, *args, **kwargs)
+            if result:
+                outcome = "ok"
+                span.set_attribute("dm.outcome", outcome)
+            else:
+                span.set_attribute("error.type", "not_confirmed")
+                span.set_status(StatusCode.ERROR)
+            return result
+    finally:
+        labels = {"platform": PLATFORM, "kind": kind, "outcome": outcome}
+        instruments.send_duration.record(time.perf_counter() - start, labels)
+
+
+def _file_size(path: str) -> int | None:
+    """The size of a file to send, if it can be read."""
+    from pathlib import Path
+
+    try:
+        return Path(path).stat().st_size
+    except OSError, ValueError:
+        return None
+
+
 def _err(message: str, code: int = 400) -> JSONResponse:
     """A {success: false, error} response with the given status code."""
     return JSONResponse({"success": False, "error": message}, status_code=code)
@@ -513,7 +555,10 @@ async def send(request: Request) -> JSONResponse:
     thread_id, text = body.get("thread_id"), body.get("text", "")
     if not thread_id or not text:
         return _err("thread_id and text required")
-    msg = await run_in_threadpool(gw().client.reply_to_thread, thread_id=thread_id, text=text)
+    size = len(str(text).encode())
+    msg = await _platform_send(
+        "text", size, gw().client.reply_to_thread, thread_id=thread_id, text=text
+    )
     if msg is None:
         return _err("not confirmed", 502)
     return JSONResponse({"success": True, "message_id": msg.message_id})
@@ -528,15 +573,16 @@ async def send_media(request: Request) -> JSONResponse:
     if not thread_id or not path:
         return _err("thread_id and path required")
     view_mode = body.get("view_mode")
+    media, size = ("video" if kind == "video" else "image"), _file_size(path)
     if view_mode:  # a disappearing photo/video
         if view_mode not in ("once", "replayable"):
             return _err("view_mode must be 'once' or 'replayable'")
-        item_id = await run_in_threadpool(
-            gw().client.send_disappearing, Path(path), thread_id, view_mode
+        item_id = await _platform_send(
+            media, size, gw().client.send_disappearing, Path(path), thread_id, view_mode
         )
         return JSONResponse({"success": True, "message_id": item_id})
     fn = gw().client.send_video if kind == "video" else gw().client.send_photo
-    msg = await run_in_threadpool(fn, path=Path(path), thread_ids=[thread_id])
+    msg = await _platform_send(media, size, fn, path=Path(path), thread_ids=[thread_id])
     if msg is None:
         return _err("not confirmed", 502)
     return JSONResponse({"success": True, "message_id": msg.message_id})
@@ -550,7 +596,9 @@ async def send_voice(request: Request) -> JSONResponse:
     thread_id, path = body.get("thread_id"), body.get("path")
     if not thread_id or not path:
         return _err("thread_id and path required")
-    msg = await run_in_threadpool(gw().client.send_voice, Path(path), thread_id)
+    msg = await _platform_send(
+        "audio", _file_size(path), gw().client.send_voice, Path(path), thread_id
+    )
     if msg is None:
         return _err("not confirmed", 502)
     return JSONResponse({"success": True, "message_id": msg.message_id})
@@ -563,7 +611,10 @@ async def react(request: Request) -> JSONResponse:
     emoji, remove = body.get("emoji", ""), bool(body.get("remove", False))
     if not thread_id or not message_id:
         return _err("thread_id and message_id required")
-    ok = await run_in_threadpool(gw().client.react, thread_id, message_id, emoji, remove=remove)
+    react_call = gw().client.react
+    ok = await _platform_send(
+        "reaction", None, react_call, thread_id, message_id, emoji, remove=remove
+    )
     return JSONResponse({"success": bool(ok)})
 
 
@@ -787,7 +838,7 @@ async def share_media(request: Request) -> JSONResponse:
     media_id, thread_id = body.get("media_id"), body.get("thread_id")
     if not media_id or not thread_id:
         return _err("media_id and thread_id required")
-    ok = await run_in_threadpool(gw().client.share_media, media_id, None, [thread_id])
+    ok = await _platform_send("share", None, gw().client.share_media, media_id, None, [thread_id])
     return JSONResponse({"success": bool(ok)})
 
 
@@ -797,7 +848,8 @@ async def share_profile(request: Request) -> JSONResponse:
     user_id, thread_id = body.get("user_id"), body.get("thread_id")
     if not user_id or not thread_id:
         return _err("user_id and thread_id required")
-    ok = await run_in_threadpool(gw().client.share_profile, user_id, None, [thread_id])
+    share_call = gw().client.share_profile
+    ok = await _platform_send("share", None, share_call, user_id, None, [thread_id])
     return JSONResponse({"success": bool(ok)})
 
 

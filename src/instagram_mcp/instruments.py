@@ -117,6 +117,17 @@ http_server_duration = meter.create_histogram(
 """Attributes: http.request.method, http.route, http.response.status_code, error.type."""
 
 
+# ── Bridge: sends ───────────────────────────────────────────────────────────
+
+send_duration = meter.create_histogram(
+    "dm.bridge.send.duration",
+    unit="s",
+    description="One send through Instagram's API, until Instagram confirmed it (or not).",
+    explicit_bucket_boundaries_advisory=SEND_BUCKETS,
+)
+"""Attributes: platform, kind (text image video audio reaction share), outcome."""
+
+
 # ── Bridge: the MQTT connection ─────────────────────────────────────────────
 
 connection_events = meter.create_counter(
