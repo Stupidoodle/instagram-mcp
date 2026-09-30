@@ -11,6 +11,12 @@ StartLimitBurst=5
 
 [Service]
 WorkingDirectory=%h/Documents/informatik/instagram-mcp
+# Traces and metrics over OTLP/HTTP to the local Alloy. Logs stay out of OTLP: the
+# bridge writes JSON lines to stdout, the journal keeps them and Alloy ships those.
+Environment=OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318
+Environment=OTEL_RESOURCE_ATTRIBUTES=deployment.environment.name=prod
+Environment=OTEL_METRIC_EXPORT_INTERVAL=15000
+Environment=OTEL_LOGS_EXPORTER=none
 ExecStart=%h/.local/bin/uv run --frozen instagram-bridge
 Restart=always
 RestartSec=5
