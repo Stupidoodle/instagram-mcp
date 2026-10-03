@@ -549,6 +549,20 @@ async def health(_request: Request) -> JSONResponse:
     )
 
 
+async def ready(_request: Request) -> JSONResponse:
+    """Readiness: 200 while the session is logged in and MQTT is up, else 503 and why.
+
+    The reason is ``not_logged_in`` (no account id yet) or ``disconnected`` (MQTT down; the
+    watchdog reconnects it). Unlike ``/health`` it carries no id.
+    """
+    g = gw()
+    if not g.self_user_id:
+        return JSONResponse({"ready": False, "reason": "not_logged_in"}, status_code=503)
+    if not g.mqtt_connected():
+        return JSONResponse({"ready": False, "reason": "disconnected"}, status_code=503)
+    return JSONResponse({"ready": True})
+
+
 async def send(request: Request) -> JSONResponse:
     """Send a text message to a thread."""
     body = await _json(request)
@@ -858,6 +872,7 @@ def build_app() -> Starlette:
     routes = [
         Route("/events", sse_events),
         Route("/health", health),
+        Route("/ready", ready),
         Route("/send", send, methods=["POST"]),
         Route("/send_media", send_media, methods=["POST"]),
         Route("/send_voice", send_voice, methods=["POST"]),
