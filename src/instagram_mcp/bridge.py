@@ -39,7 +39,7 @@ from starlette.middleware import Middleware
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
-from instagram_mcp import instruments
+from instagram_mcp import instruments, replies
 from instagram_mcp.client import (
     AuthenticationError,
     InstagramClient,
@@ -276,6 +276,9 @@ class Gateway:
             attributes = {"platform": PLATFORM, "direction": who, "kind": kind}
             instruments.bridge_messages.add(1, attributes)
             trace.get_current_span().set_attribute("dm.message.kind", kind)  # now known
+            # Only the other side's messages: the account's own come back as echoes.
+            if isinstance(event, MessageEvent) and who == "in":
+                replies.note(event.thread_id, trace.get_current_span(), from_me=False)
         if isinstance(event, SeenEvent) and self.seen_log is not None:
             try:
                 self.seen_log.add(event)
@@ -499,11 +502,18 @@ async def _json(request: Request) -> dict[str, Any]:
 
 
 async def _platform_send[T](
-    kind: str, size: int | None, send_call: Callable[..., T], *args: Any, **kwargs: Any
+    kind: str,
+    size: int | None,
+    send_call: Callable[..., T],
+    *args: Any,
+    reply_thread: str | None = None,
+    **kwargs: Any,
 ) -> T:
     """Run one instagrapi send on a worker thread in an ``instagram.send`` span, timed.
 
     A falsy result (no message back, or False) is Instagram not confirming it: an error.
+    ``reply_thread`` is the thread a message goes to, so a confirmed one can count as a
+    reply there (replies.py); reactions pass none.
     """
     attributes: dict[str, str | int] = {
         "dm.platform": PLATFORM,
@@ -521,6 +531,8 @@ async def _platform_send[T](
             if result:
                 outcome = "ok"
                 span.set_attribute("dm.outcome", outcome)
+                if reply_thread:
+                    replies.note(reply_thread, span, from_me=True)  # while the span is current
             else:
                 span.set_attribute("error.type", "not_confirmed")
                 span.set_status(StatusCode.ERROR)
@@ -575,7 +587,12 @@ async def send(request: Request) -> JSONResponse:
         return _err("thread_id and text required")
     size = len(str(text).encode())
     msg = await _platform_send(
-        "text", size, gw().client.reply_to_thread, thread_id=thread_id, text=text
+        "text",
+        size,
+        gw().client.reply_to_thread,
+        thread_id=thread_id,
+        text=text,
+        reply_thread=thread_id,
     )
     if msg is None:
         return _err("not confirmed", 502)
@@ -595,12 +612,15 @@ async def send_media(request: Request) -> JSONResponse:
     if view_mode:  # a disappearing photo/video
         if view_mode not in ("once", "replayable"):
             return _err("view_mode must be 'once' or 'replayable'")
+        send_call = gw().client.send_disappearing
         item_id = await _platform_send(
-            media, size, gw().client.send_disappearing, Path(path), thread_id, view_mode
+            media, size, send_call, Path(path), thread_id, view_mode, reply_thread=thread_id
         )
         return JSONResponse({"success": True, "message_id": item_id})
     fn = gw().client.send_video if kind == "video" else gw().client.send_photo
-    msg = await _platform_send(media, size, fn, path=Path(path), thread_ids=[thread_id])
+    msg = await _platform_send(
+        media, size, fn, path=Path(path), thread_ids=[thread_id], reply_thread=thread_id
+    )
     if msg is None:
         return _err("not confirmed", 502)
     return JSONResponse({"success": True, "message_id": msg.message_id})
@@ -615,7 +635,12 @@ async def send_voice(request: Request) -> JSONResponse:
     if not thread_id or not path:
         return _err("thread_id and path required")
     msg = await _platform_send(
-        "audio", _file_size(path), gw().client.send_voice, Path(path), thread_id
+        "audio",
+        _file_size(path),
+        gw().client.send_voice,
+        Path(path),
+        thread_id,
+        reply_thread=thread_id,
     )
     if msg is None:
         return _err("not confirmed", 502)
@@ -856,7 +881,10 @@ async def share_media(request: Request) -> JSONResponse:
     media_id, thread_id = body.get("media_id"), body.get("thread_id")
     if not media_id or not thread_id:
         return _err("media_id and thread_id required")
-    ok = await _platform_send("share", None, gw().client.share_media, media_id, None, [thread_id])
+    share_call = gw().client.share_media
+    ok = await _platform_send(
+        "share", None, share_call, media_id, None, [thread_id], reply_thread=thread_id
+    )
     return JSONResponse({"success": bool(ok)})
 
 
@@ -867,7 +895,9 @@ async def share_profile(request: Request) -> JSONResponse:
     if not user_id or not thread_id:
         return _err("user_id and thread_id required")
     share_call = gw().client.share_profile
-    ok = await _platform_send("share", None, share_call, user_id, None, [thread_id])
+    ok = await _platform_send(
+        "share", None, share_call, user_id, None, [thread_id], reply_thread=thread_id
+    )
     return JSONResponse({"success": bool(ok)})
 
 

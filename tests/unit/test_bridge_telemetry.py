@@ -5,16 +5,18 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import httpx2
 import pytest
 from opentelemetry import trace
-from opentelemetry.trace import SpanKind, StatusCode
+from opentelemetry.sdk.metrics.export import HistogramDataPoint
+from opentelemetry.trace import SpanContext, SpanKind, StatusCode, TraceFlags
 
-from instagram_mcp import instruments
-from instagram_mcp.bridge import Gateway
+from instagram_mcp import instruments, replies
+from instagram_mcp.bridge import Gateway, _platform_send
 from instagram_mcp.event_log import EventLog
 from instagram_mcp.instruments import SEND_BUCKETS, message_kind
 from instagram_mcp.media import InboundMedia
@@ -342,3 +344,126 @@ class TestEventMetrics:
 )
 def test_message_kinds(item_type: str, path: str | None, share: bool, kind: str) -> None:
     assert message_kind(item_type, path, share=share) == kind
+
+
+# ── Reply latency (replies.py) ──────────────────────────────────────────────
+
+
+class Clock:
+    """A settable monotonic clock for the reply tracker."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.fixture
+def clock() -> Iterator[Clock]:
+    fake = Clock()
+    with patch.object(replies, "tracker", replies.Conversations(fake)):
+        yield fake
+
+
+def _ctx(n: int) -> SpanContext:
+    return SpanContext(n, n, is_remote=False, trace_flags=TraceFlags(TraceFlags.SAMPLED))
+
+
+@pytest.mark.parametrize(
+    ("steps", "want"),
+    [
+        # (seconds after the last step, from_me) ... -> the reply each step counts as
+        ([(0, False), (45, True), (1200, False)], [None, ("me", 45), ("them", 1200)]),
+        ([(0, False), (60, False), (30, True)], [None, None, ("me", 30)]),
+        ([(0, True), (5, True)], [None, None]),
+        ([(0, True), (7200, False), (7199, True)], [None, None, ("me", 7199)]),
+    ],
+    ids=["back and forth", "from the last message", "same side", "the gap"],
+)
+def test_reply_rule(
+    clock: Clock, steps: list[tuple[float, bool]], want: list[tuple[str, float] | None]
+) -> None:
+    for i, ((after, from_me), expected) in enumerate(zip(steps, want, strict=True)):
+        clock.now += after
+        reply = replies.tracker.observe(THREAD, from_me=from_me, span=_ctx(i + 1))
+        if expected is None:
+            assert reply is None, i
+        else:
+            assert reply is not None and (reply.side, reply.seconds) == expected, i
+            assert reply.answers == _ctx(i)
+
+
+def test_threads_past_the_gap_are_forgotten(clock: Clock) -> None:
+    for thread in ("a", "b", "c"):
+        replies.tracker.observe(thread, from_me=False, span=_ctx(1))
+        clock.now += 3600
+    assert len(replies.tracker) == 2
+
+
+async def _send(telemetry: Telemetry, thread: str | None) -> ReadableSpan:
+    def sent() -> SimpleNamespace:
+        return SimpleNamespace(message_id="m1")
+
+    await _platform_send("text", 4, sent, reply_thread=thread)
+    return telemetry.named("instagram.send")[-1]
+
+
+def _replies(telemetry: Telemetry, side: str) -> tuple[float, set[int | None]]:
+    """One collection: how many replies of a side so far, and their exemplars' span ids.
+
+    The SDK hands each exemplar out once, so both come from the same collection.
+    """
+    metric = telemetry.metric("dm.bridge.reply.duration")
+    points = [
+        p
+        for p in (metric.data.data_points if metric else [])
+        if isinstance(p, HistogramDataPoint)
+        and dict(p.attributes or {}) == {"platform": "instagram", "side": side}
+    ]
+    return sum(p.count for p in points), {e.span_id for p in points for e in p.exemplars}
+
+
+class TestReplies:
+    async def test_a_reply_and_its_answer_link_to_what_they_answer(
+        self, tmp_path: Path, telemetry: Telemetry, clock: Clock
+    ) -> None:
+        g = _gateway(tmp_path)
+        (me, _), (them, _) = _replies(telemetry, "me"), _replies(telemetry, "them")
+        await _feed(g, _message(item_id="in1"))
+        (inbound,) = telemetry.named("instagram.event message")
+        clock.now += 45
+        reply = await _send(telemetry, THREAD)
+        assert dict(reply.attributes or {})["dm.reply.side"] == "me"
+        assert dict(reply.attributes or {})["dm.reply.seconds"] == 45
+        assert [link.context.span_id for link in reply.links] == [inbound.context.span_id]
+        assert dict(reply.links[0].attributes or {}) == {"dm.link.type": "reply_to"}
+        assert _replies(telemetry, "me") == (me + 1, {reply.context.span_id})
+
+        # The echo of our own send changes nothing; the answer counts from the send.
+        clock.now += 2
+        await _feed(g, _message(user=int(ME), item_id="m1"))
+        clock.now += 1200
+        await _feed(g, _message(item_id="in2"))
+        answer = telemetry.named("instagram.event message")[-1]
+        assert dict(answer.attributes or {})["dm.reply.side"] == "them"
+        assert dict(answer.attributes or {})["dm.reply.seconds"] == 1202
+        assert [link.context.span_id for link in answer.links] == [reply.context.span_id]
+        assert _replies(telemetry, "them") == (them + 1, {answer.context.span_id})
+
+    async def test_what_never_counts(
+        self, tmp_path: Path, telemetry: Telemetry, clock: Clock
+    ) -> None:
+        g = _gateway(tmp_path)
+        (me, _), (them, _) = _replies(telemetry, "me"), _replies(telemetry, "them")
+        # The owner's own chats: inbound only, and the owner's phone messages (echoes).
+        await _feed(g, _message(item_id="a"), _message(user=int(ME), item_id="b"))
+        clock.now += 30
+        await _feed(g, _message(item_id="c"))
+        # A reaction sent through the API is no reply; neither is an edit or a reaction in.
+        clock.now += 30
+        await _send(telemetry, None)
+        edit = MessageEvent(THREAD, "c", HER, "edited", "text", 1, edited=True)
+        await _feed(g, edit, ReactionEvent(THREAD, "c", HER, "❤️", "add"))
+        assert (_replies(telemetry, "me")[0], _replies(telemetry, "them")[0]) == (me, them)
+        assert not any("dm.reply.side" in (s.attributes or {}) for s in telemetry.spans())
