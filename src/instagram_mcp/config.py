@@ -154,7 +154,7 @@ def get_settings() -> Settings:
     Raises:
         ValidationError: If required environment variables are missing.
     """
-    return Settings()
+    return Settings()  # type: ignore[call-arg]  # the environment fills the required fields
 
 
 def setup_logging(

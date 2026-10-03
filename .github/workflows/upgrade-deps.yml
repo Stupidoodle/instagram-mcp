@@ -41,6 +41,14 @@ jobs:
           uv sync --locked
           uv run pytest -q tests/unit tests/integration
 
+      # A new ruff or mypy release can find things the old one didn't; such an upgrade
+      # waits until the code is fixed instead of landing on main red.
+      - name: Lint and type-check against the locked versions
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run mypy src
+
       - name: Commit and push
         if: steps.lock.outputs.changed == 'true'
         run: |

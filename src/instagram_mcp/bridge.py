@@ -489,9 +489,10 @@ async def sse_events(request: Request) -> StreamingResponse:
 async def _json(request: Request) -> dict[str, Any]:
     """Parse the request JSON body, or {} on error."""
     try:
-        return await request.json()
+        body: dict[str, Any] = await request.json()
     except Exception:
         return {}
+    return body
 
 
 async def _platform_send[T](

@@ -150,7 +150,7 @@ def _convert_message(
     msg: IGDirectMessage,
     thread_id: str,
     users_by_id: dict[str, ThreadUser] | None = None,
-    last_seen_at: dict | None = None,
+    last_seen_at: dict[str, Any] | None = None,
     viewer_id: str | None = None,
 ) -> DirectMessage:
     """Convert instagrapi DirectMessage to our DirectMessage model.
@@ -364,7 +364,7 @@ class InstagramClient:
             kwargs.setdefault("timeout", timeout)
             return original_request(*args, **kwargs)
 
-        session.request = _request_with_timeout  # type: ignore[assignment]
+        session.request = _request_with_timeout
 
     def _apply_app_version(self) -> bool:
         """Run the target app version, the way the real app updates itself.
@@ -756,7 +756,7 @@ class InstagramClient:
         )
         return int(result.get("seq_id", 0))
 
-    def get_iris_info(self) -> dict:
+    def get_iris_info(self) -> dict[str, Any]:
         """Get Iris subscription info from the inbox endpoint.
 
         Returns:
@@ -900,10 +900,7 @@ class InstagramClient:
         ephemeral = False
         if item.item_type == "raven_media":
             visual = item.visual_media
-            if (
-                getattr(visual, "view_mode", None) != "permanent"
-                and not self.PERMANENT_MEDIA
-            ):
+            if getattr(visual, "view_mode", None) != "permanent" and not self.PERMANENT_MEDIA:
                 if ephemeral_folder is None:
                     msg = "view-once media is only downloaded into a temporary folder"
                     raise InstagramClientError(msg)
