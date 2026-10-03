@@ -5,14 +5,14 @@ representing Instagram threads, messages, and users.
 """
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 from instagram_mcp.shares import Share
 
 
-class MediaType(str, Enum):
+class MediaType(StrEnum):
     """Types of media that can be sent in direct messages."""
 
     TEXT = "text"
