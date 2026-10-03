@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import io
 import json
+import time
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import httpx2
 import pytest
 from opentelemetry import trace
-from opentelemetry.trace import SpanKind, StatusCode
+from opentelemetry._logs import get_logger_provider
+from opentelemetry.sdk._logs import LoggerProvider
+from opentelemetry.sdk.metrics.export import HistogramDataPoint
+from opentelemetry.trace import SpanContext, SpanKind, StatusCode, TraceFlags
 
-from instagram_mcp import instruments
-from instagram_mcp.bridge import Gateway
+from instagram_mcp import bridge, instruments, logs, replies
+from instagram_mcp.bridge import Gateway, _platform_send
 from instagram_mcp.event_log import EventLog
 from instagram_mcp.instruments import SEND_BUCKETS, message_kind
 from instagram_mcp.media import InboundMedia
@@ -304,6 +311,22 @@ class TestEventMetrics:
             instruments.sources.bridge_queues = None
         assert telemetry.points("dm.bridge.queue.depth") == []
 
+    async def test_freshness_by_event_type(self, tmp_path: Path, telemetry: Telemetry) -> None:
+        g = _gateway(tmp_path)
+        before = time.time()
+        await _feed(g, _message(), TypingEvent(THREAD, HER, 1, 10_000))
+        after = time.time()
+        metric = telemetry.metric("dm.bridge.last_event.timestamp")
+        assert metric is not None and metric.unit == "s"
+        stamps = {
+            dict(p.attributes or {})["type"]: p.value  # type: ignore[union-attr]
+            for p in metric.data.data_points
+            if dict(p.attributes or {})["platform"] == "instagram"
+        }
+        assert before <= stamps["message"] <= after
+        assert before <= stamps["typing"] <= after
+        assert all(set(p) == {"platform", "type"} for p in telemetry.points(metric.name))
+
 
 @pytest.mark.parametrize(
     ("item_type", "path", "share", "kind"),
@@ -325,3 +348,214 @@ class TestEventMetrics:
 )
 def test_message_kinds(item_type: str, path: str | None, share: bool, kind: str) -> None:
     assert message_kind(item_type, path, share=share) == kind
+
+
+# ── Reply latency (replies.py) ──────────────────────────────────────────────
+
+
+class Clock:
+    """A settable monotonic clock for the reply tracker."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.fixture
+def clock() -> Iterator[Clock]:
+    fake = Clock()
+    with patch.object(replies, "tracker", replies.Conversations(fake)):
+        yield fake
+
+
+def _ctx(n: int) -> SpanContext:
+    return SpanContext(n, n, is_remote=False, trace_flags=TraceFlags(TraceFlags.SAMPLED))
+
+
+@pytest.mark.parametrize(
+    ("steps", "want"),
+    [
+        # (seconds after the last step, from_me) ... -> the reply each step counts as
+        ([(0, False), (45, True), (1200, False)], [None, ("me", 45), ("them", 1200)]),
+        ([(0, False), (60, False), (30, True)], [None, None, ("me", 30)]),
+        ([(0, True), (5, True)], [None, None]),
+        ([(0, True), (7200, False), (7199, True)], [None, None, ("me", 7199)]),
+    ],
+    ids=["back and forth", "from the last message", "same side", "the gap"],
+)
+def test_reply_rule(
+    clock: Clock, steps: list[tuple[float, bool]], want: list[tuple[str, float] | None]
+) -> None:
+    for i, ((after, from_me), expected) in enumerate(zip(steps, want, strict=True)):
+        clock.now += after
+        reply = replies.tracker.observe(THREAD, from_me=from_me, span=_ctx(i + 1))
+        if expected is None:
+            assert reply is None, i
+        else:
+            assert reply is not None and (reply.side, reply.seconds) == expected, i
+            assert reply.answers == _ctx(i)
+
+
+def test_threads_past_the_gap_are_forgotten(clock: Clock) -> None:
+    for thread in ("a", "b", "c"):
+        replies.tracker.observe(thread, from_me=False, span=_ctx(1))
+        clock.now += 3600
+    assert len(replies.tracker) == 2
+
+
+async def _send(telemetry: Telemetry, thread: str | None) -> ReadableSpan:
+    def sent() -> SimpleNamespace:
+        return SimpleNamespace(message_id="m1")
+
+    await _platform_send("text", 4, sent, reply_thread=thread)
+    return telemetry.named("instagram.send")[-1]
+
+
+def _replies(telemetry: Telemetry, side: str) -> tuple[float, set[int | None]]:
+    """One collection: how many replies of a side so far, and their exemplars' span ids.
+
+    The SDK hands each exemplar out once, so both come from the same collection.
+    """
+    metric = telemetry.metric("dm.bridge.reply.duration")
+    points = [
+        p
+        for p in (metric.data.data_points if metric else [])
+        if isinstance(p, HistogramDataPoint)
+        and dict(p.attributes or {}) == {"platform": "instagram", "side": side}
+    ]
+    return sum(p.count for p in points), {e.span_id for p in points for e in p.exemplars}
+
+
+class TestReplies:
+    async def test_a_reply_and_its_answer_link_to_what_they_answer(
+        self, tmp_path: Path, telemetry: Telemetry, clock: Clock
+    ) -> None:
+        g = _gateway(tmp_path)
+        (me, _), (them, _) = _replies(telemetry, "me"), _replies(telemetry, "them")
+        await _feed(g, _message(item_id="in1"))
+        (inbound,) = telemetry.named("instagram.event message")
+        clock.now += 45
+        reply = await _send(telemetry, THREAD)
+        assert dict(reply.attributes or {})["dm.reply.side"] == "me"
+        assert dict(reply.attributes or {})["dm.reply.seconds"] == 45
+        assert [link.context.span_id for link in reply.links] == [inbound.context.span_id]
+        assert dict(reply.links[0].attributes or {}) == {"dm.link.type": "reply_to"}
+        assert _replies(telemetry, "me") == (me + 1, {reply.context.span_id})
+
+        # The echo of our own send changes nothing; the answer counts from the send.
+        clock.now += 2
+        await _feed(g, _message(user=int(ME), item_id="m1"))
+        clock.now += 1200
+        await _feed(g, _message(item_id="in2"))
+        answer = telemetry.named("instagram.event message")[-1]
+        assert dict(answer.attributes or {})["dm.reply.side"] == "them"
+        assert dict(answer.attributes or {})["dm.reply.seconds"] == 1202
+        assert [link.context.span_id for link in answer.links] == [reply.context.span_id]
+        assert _replies(telemetry, "them") == (them + 1, {answer.context.span_id})
+
+    async def test_what_never_counts(
+        self, tmp_path: Path, telemetry: Telemetry, clock: Clock
+    ) -> None:
+        g = _gateway(tmp_path)
+        (me, _), (them, _) = _replies(telemetry, "me"), _replies(telemetry, "them")
+        # The owner's own chats: inbound only, and the owner's phone messages (echoes).
+        await _feed(g, _message(item_id="a"), _message(user=int(ME), item_id="b"))
+        clock.now += 30
+        await _feed(g, _message(item_id="c"))
+        # A reaction sent through the API is no reply; neither is an edit or a reaction in.
+        clock.now += 30
+        await _send(telemetry, None)
+        edit = MessageEvent(THREAD, "c", HER, "edited", "text", 1, edited=True)
+        await _feed(g, edit, ReactionEvent(THREAD, "c", HER, "❤️", "add"))
+        assert (_replies(telemetry, "me")[0], _replies(telemetry, "them")[0]) == (me, them)
+        assert not any("dm.reply.side" in (s.attributes or {}) for s in telemetry.spans())
+
+
+# ── No text leaves ──────────────────────────────────────────────────────────
+
+
+def _span_strings(spans: list[ReadableSpan]) -> list[str]:
+    """Every string a span exports: name, status, attributes, events and links."""
+    out: list[str] = []
+    for s in spans:
+        out += [f"span {s.name}", f"status {s.status.description}"]
+        out += [f"{s.name} {k}={v}" for k, v in (s.attributes or {}).items()]
+        for e in s.events:
+            out += [f"{s.name} event {e.name}", json.dumps(dict(e.attributes or {}), default=str)]
+        out += [json.dumps(dict(link.attributes or {})) for link in s.links]
+    return out
+
+
+def _metric_strings(telemetry: Telemetry) -> list[str]:
+    """Every data point's attributes, and its exemplars', of every metric."""
+    data = telemetry.reader.get_metrics_data()
+    out: list[str] = []
+    for resource in data.resource_metrics if data else []:
+        for scope in resource.scope_metrics:
+            for metric in scope.metrics:
+                for point in metric.data.data_points:
+                    out.append(f"{metric.name} {dict(point.attributes or {})}")
+                    for exemplar in getattr(point, "exemplars", None) or []:
+                        filtered = dict(exemplar.filtered_attributes or {})
+                        out.append(f"{metric.name} exemplar {filtered}")
+    return out
+
+
+def _log_strings(telemetry: Telemetry, stream: io.StringIO) -> list[str]:
+    """The JSON lines, and every OTLP log record's body and attributes."""
+    out = stream.getvalue().splitlines()
+    for finished in telemetry.logs.get_finished_logs():
+        record = finished.log_record
+        out.append(f"{record.body} {dict(record.attributes or {})}")
+    return out
+
+
+_HTTP_CLIENT = httpx2.AsyncClient  # the real one: the transcriber fixture patches the module's
+
+
+class TestNoTextLeaves:
+    async def test_no_text_or_ids_in_any_signal(
+        self,
+        tmp_path: Path,
+        telemetry: Telemetry,
+        transcriber: Transcriber,
+        clock: Clock,
+        restore_logging: None,
+    ) -> None:
+        stream = io.StringIO()
+        provider = get_logger_provider()
+        assert isinstance(provider, LoggerProvider)
+        logs.setup("INFO", service="instagram-bridge", stream=stream, provider=provider)
+        g = _gateway(tmp_path)
+        # In: a text and a voice note whose transcription fails (a warning is logged).
+        transcriber.status = 502
+        await _feed(g, _message(), _message("voice_media", item_id="i2"))
+        # Out: a reply that counts, and a send whose error names the thread and the text.
+        clock.now += 30
+        await _send(telemetry, THREAD)
+
+        def leaky() -> None:
+            raise RuntimeError(f"/direct_v2/threads/{THREAD}/ {TEXT!r} for {HER}")
+
+        with contextlib.suppress(RuntimeError):
+            await _platform_send("text", 4, leaky, reply_thread=THREAD)
+        # HTTP: the thread in a body and in a query string.
+        gateway = MagicMock()
+        gateway.client.reply_to_thread.return_value = SimpleNamespace(message_id="m2")
+        gateway.client.get_messages.return_value = []
+        with patch.object(bridge, "gateway", gateway):
+            transport = httpx2.ASGITransport(app=bridge.build_app(), raise_app_exceptions=False)
+            async with _HTTP_CLIENT(transport=transport, base_url="http://b") as http:
+                await http.post("/send", json={"thread_id": THREAD, "text": TEXT})
+                await http.get("/messages", params={"thread_id": THREAD})
+
+        spans = telemetry.spans()
+        assert any(s.links for s in spans), "the reply path did not run"
+        assert telemetry.named("POST /send") and telemetry.named("GET /messages")
+        log_lines = _log_strings(telemetry, stream)
+        assert stream.getvalue() and telemetry.logs.get_finished_logs(), "nothing was logged"
+        exported = _span_strings(spans) + _metric_strings(telemetry) + log_lines
+        leaks = [(secret, line) for line in exported for secret in PRIVATE if secret in line]
+        assert leaks == []

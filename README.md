@@ -165,6 +165,9 @@ The SDK reads these from the process environment (the systemd unit, the `env` of
   the bridge's trace. It logs JSON to stderr and, when on, over OTLP. Add the variables to
   the persona's `.mcp.json` `env` and relaunch the session.
 
+Every signal, name and label, the reply latency and the probe routes (`/health`,
+`/ready`) are in [docs/observability.md](docs/observability.md).
+
 Logs are one JSON object per line: `time`, `level`, `msg`, `service`, `trace_id` and
 `span_id` inside a span, then fields such as `message_id`, `kind` or `error_type`. Message
 text, names, usernames, user ids and thread ids never go into telemetry or INFO+ logs; an
