@@ -36,6 +36,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (  # noqa: E4
     InMemorySpanExporter,
 )
 
+from instagram_mcp import replies  # noqa: E402
 from instagram_mcp.bridge_client import BridgeClient  # noqa: E402
 from instagram_mcp.client import InstagramClient  # noqa: E402
 from instagram_mcp.config import Settings  # noqa: E402
@@ -64,6 +65,16 @@ def _install_telemetry() -> Telemetry:
 
 
 _TELEMETRY = _install_telemetry()
+
+
+@pytest.fixture(autouse=True)
+def fresh_reply_tracker() -> Iterator[None]:
+    """Each test starts with no conversation state in the bridge's reply tracker.
+
+    Otherwise a send in one test could count as a reply to a message from another.
+    """
+    with patch.object(replies, "tracker", replies.Conversations()):
+        yield
 
 
 @pytest.fixture
