@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import time
 import zlib
+from typing import Any
 
 from instagram_mcp.mqtt.topics import SUBSCRIBE_TOPICS
 
@@ -127,7 +128,7 @@ class ThriftCompactWriter:
         return bytes(self._buf)
 
 
-def build_connect_payload(session: dict[str, object]) -> bytes:
+def build_connect_payload(session: dict[str, Any]) -> bytes:
     """Build the zlib-compressed Thrift CONNECT payload from an instagrapi session.
 
     Args:

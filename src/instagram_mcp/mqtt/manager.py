@@ -14,7 +14,7 @@ import os
 import threading
 import time
 import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from instagrapi import config as ig_config
 
@@ -429,7 +429,7 @@ class MQTTManager:
             except Exception:
                 logger.exception("MQTT listener failed", extra={"event": type(event).__name__})
 
-    def _publish(self, topic_id: int, payload: dict) -> None:
+    def _publish(self, topic_id: int, payload: dict[str, Any]) -> None:
         """Publish to an MQTT topic with auto-incrementing packet ID."""
         with self._packet_id_lock:
             pid = self._packet_id_counter

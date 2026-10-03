@@ -151,7 +151,7 @@ class BridgeClient:
             resp = self._http.post(path, json=body, timeout=timeout or httpx2.USE_CLIENT_DEFAULT)
         except httpx2.HTTPError as e:
             raise BridgeError(f"bridge unreachable: {e}") from e
-        data = resp.json()
+        data: dict[str, Any] = resp.json()
         if resp.status_code >= 400 and "error" not in data:
             data = {"success": False, "error": f"HTTP {resp.status_code}"}
         return data
@@ -161,7 +161,8 @@ class BridgeClient:
             resp = self._http.get(path, params=params)
         except httpx2.HTTPError as e:
             raise BridgeError(f"bridge unreachable: {e}") from e
-        return resp.json()
+        data: dict[str, Any] = resp.json()
+        return data
 
     # ── identity ───────────────────────────────────────────────────────────
     def health(self) -> dict[str, Any]:
@@ -255,8 +256,8 @@ class BridgeClient:
     # ── reads ──────────────────────────────────────────────────────────────
     def threads(self, amount: int = 20) -> list[dict[str, Any]]:
         """List recent threads."""
-        resp = self._get("/threads", {"amount": amount})
-        return resp.get("threads", [])
+        threads: list[dict[str, Any]] = self._get("/threads", {"amount": amount}).get("threads", [])
+        return threads
 
     def thread(self, thread_id: str, amount: int = 20) -> dict[str, Any]:
         """One thread with its recent messages."""
@@ -264,17 +265,21 @@ class BridgeClient:
 
     def search(self, query: str) -> list[dict[str, Any]]:
         """Search threads."""
-        resp = self._get("/thread_search", {"query": query})
-        return resp.get("threads", [])
+        threads: list[dict[str, Any]] = self._get("/thread_search", {"query": query}).get(
+            "threads", []
+        )
+        return threads
 
     def messages(self, thread_id: str, amount: int = 20) -> list[dict[str, Any]]:
         """Recent messages in a thread."""
-        resp = self._get("/messages", {"thread_id": thread_id, "amount": amount})
-        return resp.get("messages", [])
+        params = {"thread_id": thread_id, "amount": amount}
+        messages: list[dict[str, Any]] = self._get("/messages", params).get("messages", [])
+        return messages
 
     def pending(self) -> list[dict[str, Any]]:
         """Pending (message-request) threads."""
-        return self._get("/pending").get("threads", [])
+        threads: list[dict[str, Any]] = self._get("/pending").get("threads", [])
+        return threads
 
 
 def _inject_trace(request: httpx2.Request) -> None:

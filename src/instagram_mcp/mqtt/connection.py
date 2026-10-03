@@ -14,6 +14,7 @@ import socket
 import ssl
 import struct
 import zlib
+from typing import Any
 
 import certifi
 
@@ -118,7 +119,7 @@ class MQTToTConnection:
     def publish(
         self,
         topic_id: int,
-        payload_dict: dict,
+        payload_dict: dict[str, Any],
         qos: int = 1,
         packet_id: int = 1,
     ) -> None:
