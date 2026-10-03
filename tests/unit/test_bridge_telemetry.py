@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import io
 import json
 import time
 from types import SimpleNamespace
@@ -12,10 +14,12 @@ from unittest.mock import MagicMock, patch
 import httpx2
 import pytest
 from opentelemetry import trace
+from opentelemetry._logs import get_logger_provider
+from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.metrics.export import HistogramDataPoint
 from opentelemetry.trace import SpanContext, SpanKind, StatusCode, TraceFlags
 
-from instagram_mcp import instruments, replies
+from instagram_mcp import bridge, instruments, logs, replies
 from instagram_mcp.bridge import Gateway, _platform_send
 from instagram_mcp.event_log import EventLog
 from instagram_mcp.instruments import SEND_BUCKETS, message_kind
@@ -467,3 +471,91 @@ class TestReplies:
         await _feed(g, edit, ReactionEvent(THREAD, "c", HER, "❤️", "add"))
         assert (_replies(telemetry, "me")[0], _replies(telemetry, "them")[0]) == (me, them)
         assert not any("dm.reply.side" in (s.attributes or {}) for s in telemetry.spans())
+
+
+# ── No text leaves ──────────────────────────────────────────────────────────
+
+
+def _span_strings(spans: list[ReadableSpan]) -> list[str]:
+    """Every string a span exports: name, status, attributes, events and links."""
+    out: list[str] = []
+    for s in spans:
+        out += [f"span {s.name}", f"status {s.status.description}"]
+        out += [f"{s.name} {k}={v}" for k, v in (s.attributes or {}).items()]
+        for e in s.events:
+            out += [f"{s.name} event {e.name}", json.dumps(dict(e.attributes or {}), default=str)]
+        out += [json.dumps(dict(link.attributes or {})) for link in s.links]
+    return out
+
+
+def _metric_strings(telemetry: Telemetry) -> list[str]:
+    """Every data point's attributes, and its exemplars', of every metric."""
+    data = telemetry.reader.get_metrics_data()
+    out: list[str] = []
+    for resource in data.resource_metrics if data else []:
+        for scope in resource.scope_metrics:
+            for metric in scope.metrics:
+                for point in metric.data.data_points:
+                    out.append(f"{metric.name} {dict(point.attributes or {})}")
+                    for exemplar in getattr(point, "exemplars", None) or []:
+                        filtered = dict(exemplar.filtered_attributes or {})
+                        out.append(f"{metric.name} exemplar {filtered}")
+    return out
+
+
+def _log_strings(telemetry: Telemetry, stream: io.StringIO) -> list[str]:
+    """The JSON lines, and every OTLP log record's body and attributes."""
+    out = stream.getvalue().splitlines()
+    for finished in telemetry.logs.get_finished_logs():
+        record = finished.log_record
+        out.append(f"{record.body} {dict(record.attributes or {})}")
+    return out
+
+
+_HTTP_CLIENT = httpx2.AsyncClient  # the real one: the transcriber fixture patches the module's
+
+
+class TestNoTextLeaves:
+    async def test_no_text_or_ids_in_any_signal(
+        self,
+        tmp_path: Path,
+        telemetry: Telemetry,
+        transcriber: Transcriber,
+        clock: Clock,
+        restore_logging: None,
+    ) -> None:
+        stream = io.StringIO()
+        provider = get_logger_provider()
+        assert isinstance(provider, LoggerProvider)
+        logs.setup("INFO", service="instagram-bridge", stream=stream, provider=provider)
+        g = _gateway(tmp_path)
+        # In: a text and a voice note whose transcription fails (a warning is logged).
+        transcriber.status = 502
+        await _feed(g, _message(), _message("voice_media", item_id="i2"))
+        # Out: a reply that counts, and a send whose error names the thread and the text.
+        clock.now += 30
+        await _send(telemetry, THREAD)
+
+        def leaky() -> None:
+            raise RuntimeError(f"/direct_v2/threads/{THREAD}/ {TEXT!r} for {HER}")
+
+        with contextlib.suppress(RuntimeError):
+            await _platform_send("text", 4, leaky, reply_thread=THREAD)
+        # HTTP: the thread in a body and in a query string.
+        gateway = MagicMock()
+        gateway.client.reply_to_thread.return_value = SimpleNamespace(message_id="m2")
+        gateway.client.get_messages.return_value = []
+        with patch.object(bridge, "gateway", gateway):
+            transport = httpx2.ASGITransport(app=bridge.build_app(), raise_app_exceptions=False)
+            async with _HTTP_CLIENT(transport=transport, base_url="http://b") as http:
+                await http.post("/send", json={"thread_id": THREAD, "text": TEXT})
+                await http.get("/messages", params={"thread_id": THREAD})
+
+        spans = telemetry.spans()
+        assert any(s.links for s in spans), "the reply path did not run"
+        assert telemetry.named("POST /send") and telemetry.named("GET /messages")
+        log_lines = _log_strings(telemetry, stream)
+        assert stream.getvalue() and telemetry.logs.get_finished_logs(), "nothing was logged"
+        exported = _span_strings(spans) + _metric_strings(telemetry) + log_lines
+        leaks = [(secret, line) for line in exported for secret in PRIVATE if secret in line]
+        assert leaks == []
