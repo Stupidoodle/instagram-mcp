@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
@@ -303,6 +304,22 @@ class TestEventMetrics:
             instruments.sources.bridge_sse_clients = None
             instruments.sources.bridge_queues = None
         assert telemetry.points("dm.bridge.queue.depth") == []
+
+    async def test_freshness_by_event_type(self, tmp_path: Path, telemetry: Telemetry) -> None:
+        g = _gateway(tmp_path)
+        before = time.time()
+        await _feed(g, _message(), TypingEvent(THREAD, HER, 1, 10_000))
+        after = time.time()
+        metric = telemetry.metric("dm.bridge.last_event.timestamp")
+        assert metric is not None and metric.unit == "s"
+        stamps = {
+            dict(p.attributes or {})["type"]: p.value  # type: ignore[union-attr]
+            for p in metric.data.data_points
+            if dict(p.attributes or {})["platform"] == "instagram"
+        }
+        assert before <= stamps["message"] <= after
+        assert before <= stamps["typing"] <= after
+        assert all(set(p) == {"platform", "type"} for p in telemetry.points(metric.name))
 
 
 @pytest.mark.parametrize(

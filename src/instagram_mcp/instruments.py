@@ -10,6 +10,8 @@ from message content, names or ids.
 from __future__ import annotations
 
 import contextlib
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import PurePath
 from typing import TYPE_CHECKING
@@ -170,6 +172,34 @@ meter.create_observable_gauge(
     unit="{connection}",
     description="1 while the MQTT connection is up, else 0.",
 )
+
+
+# ── Bridge: freshness ───────────────────────────────────────────────────────
+
+_last_events: dict[str, float] = {}
+_last_events_lock = threading.Lock()
+
+
+def event_seen(event_type: str) -> None:
+    """Stamp now as the last time an MQTT event of this type arrived (any thread)."""
+    with _last_events_lock:
+        _last_events[event_type] = time.time()
+
+
+def _last_event(_options: CallbackOptions) -> Iterable[Observation]:
+    with _last_events_lock:
+        seen = list(_last_events.items())
+    return [Observation(at, {"platform": PLATFORM, "type": t}) for t, at in seen]
+
+
+meter.create_observable_gauge(
+    "dm.bridge.last_event.timestamp",
+    callbacks=[_last_event],
+    unit="s",
+    description="When the bridge last got an Instagram event of this type, in Unix seconds. "
+    "Absent until the first one.",
+)
+"""Attributes: platform, type (message reaction read typing unsent thread other)."""
 
 
 # ── Bridge: events ──────────────────────────────────────────────────────────

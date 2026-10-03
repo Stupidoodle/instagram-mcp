@@ -248,8 +248,12 @@ class Gateway:
             raise
 
     def _event_span(self, event: Event) -> Span:
-        """A CONSUMER span for one MQTT event: its type, kind, direction and message id."""
+        """A CONSUMER span for one MQTT event: its type, kind, direction and message id.
+
+        Every event comes through here, so it also stamps the type's freshness.
+        """
         event_type = _EVENT_TYPES.get(type(event), "other")
+        instruments.event_seen(event_type)
         attributes: dict[str, str] = {"dm.platform": PLATFORM, "dm.event.type": event_type}
         user_id = getattr(event, "user_id", None)
         if user_id is not None:
