@@ -1,5 +1,7 @@
 """MQTT topic constants for Instagram's realtime infrastructure."""
 
+import json
+
 # Topic IDs (used in PUBLISH packets as UTF-8 topic strings)
 PUBSUB = 88
 SEND_MESSAGE = 132
@@ -46,3 +48,15 @@ SUBSCRIBE_TOPICS = [
     LS_RESP,
     PP,
 ]
+
+
+# GraphQL subscription for typing indicators in the viewer's DM threads, sent on
+# REALTIME_SUB. Skywalker typing on PUBSUB stays off: the CONNECT payload
+# blacklists it (pubsub_msg_type_blacklist).
+DIRECT_TYPING_QUERY_ID = "17867973967082385"
+
+
+def direct_typing_subscription(user_id: str) -> str:
+    """The REALTIME_SUB entry for typing indicators in user_id's threads."""
+    params = json.dumps({"input_data": {"user_id": user_id}}, separators=(",", ":"))
+    return f"1/graphqlsubscriptions/{DIRECT_TYPING_QUERY_ID}/{params}"

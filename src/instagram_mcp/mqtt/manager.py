@@ -22,7 +22,12 @@ from instagram_mcp import instruments
 from instagram_mcp.mqtt.connection import PINGREQ, PINGRESP, PUBACK, PUBLISH, MQTToTConnection
 from instagram_mcp.mqtt.parser import parse_payload, parse_publish_packet
 from instagram_mcp.mqtt.thrift import build_connect_payload
-from instagram_mcp.mqtt.topics import SEND_MESSAGE, SUB_IRIS
+from instagram_mcp.mqtt.topics import (
+    REALTIME_SUB,
+    SEND_MESSAGE,
+    SUB_IRIS,
+    direct_typing_subscription,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -244,6 +249,12 @@ class MQTTManager:
         logger.info(
             "Subscribed to Iris", extra={"seq_id": seq_id, "snapshot_at_ms": snapshot_at_ms}
         )
+
+        # Typing indicators only come over this GraphQL subscription. A new socket
+        # starts with no subscriptions, so it is sent on every (re)connect.
+        user_id = str(session["authorization_data"]["ds_user_id"])
+        self._publish(REALTIME_SUB, {"sub": [direct_typing_subscription(user_id)]})
+        logger.info("Subscribed to typing indicators")
 
         # Start background reader
         self._stop_event.clear()

@@ -8,7 +8,7 @@ import threading
 import time
 import zlib
 from typing import TYPE_CHECKING
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from instagrapi import config as ig_config
@@ -94,7 +94,7 @@ class TestMQTTManagerLifecycle:
         mgr.connect(session_file, seq_id=42)
         try:
             # Unless told otherwise, Iris is subscribed with instagrapi's newest app version.
-            mock_publish.assert_called_once_with(
+            assert mock_publish.call_args_list[0] == call(
                 134,
                 {
                     "seq_id": 42,
@@ -105,6 +105,37 @@ class TestMQTTManagerLifecycle:
             )
         finally:
             mgr.disconnect()  # a failed assert must not leave the reader thread running
+
+    @patch.object(MQTTManager, "_publish")
+    @patch("instagram_mcp.mqtt.manager.build_connect_payload", return_value=b"x")
+    def test_every_connect_subscribes_typing(
+        self,
+        _mock_build: MagicMock,
+        mock_publish: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_conn = MagicMock()
+        mock_conn.is_connected = True
+        mock_conn.read_packet.return_value = None
+        mgr = MQTTManager()
+        mgr._conn = mock_conn
+        session_file = _make_session_file(tmp_path)
+        typing_sub = call(
+            149,
+            {
+                "sub": [
+                    '1/graphqlsubscriptions/17867973967082385/{"input_data":{"user_id":"12345"}}'
+                ]
+            },
+        )
+
+        try:
+            mgr.connect(session_file, seq_id=42)
+            mgr._do_connect(session_file, 42, 0, ig_config.DEFAULT_APP_VERSION)  # a reconnect
+        finally:
+            mgr.disconnect()
+
+        assert mock_publish.call_args_list.count(typing_sub) == 2
 
 
 class TestMQTTManagerReaderLoop:
