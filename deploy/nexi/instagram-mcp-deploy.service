@@ -1,6 +1,0 @@
-[Unit]
-Description=Deploy instagram-mcp origin/main when it moved
-
-[Service]
-Type=oneshot
-ExecStart=%h/Documents/informatik/instagram-mcp/deploy/nexi/deploy.sh
