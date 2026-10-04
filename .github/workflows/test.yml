@@ -1,0 +1,37 @@
+# The repo's own checks, run by release.yml before anything is released or deployed.
+# The same ones upgrade-deps runs against a new lockfile.
+name: Test
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Install the locked dependencies
+        run: uv sync --frozen
+
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+
+      - name: Type-check
+        run: uv run mypy src
+
+      - name: Test
+        run: uv run pytest -q tests/unit tests/integration
