@@ -69,7 +69,7 @@ class UnsendEvent(Event):
 
 @dataclass(frozen=True)
 class TypingEvent(Event):
-    """Typing indicator (topic 88 /pubsub via Skywalker)."""
+    """Typing indicator (topic 149 /ig_realtime_sub, GraphQL direct-typing subscription)."""
 
     user_id: int
     activity_status: int  # 0=OFF, 1=TEXT, 2=VISUAL

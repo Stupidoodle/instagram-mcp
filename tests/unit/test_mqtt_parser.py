@@ -15,6 +15,7 @@ from instagram_mcp.mqtt.parser import (
     parse_payload,
     parse_publish_packet,
 )
+from instagram_mcp.mqtt.thrift import ThriftCompactWriter
 from instagram_mcp.shares import Share
 
 
@@ -600,6 +601,69 @@ class TestParsePubsubTyping:
         assert events[0].thread_id == "T5"
         assert events[0].user_id == 33333
         assert events[0].activity_status == 1
+
+
+def _realtime_sub(topic: str, payload: object) -> bytes:
+    """A /ig_realtime_sub message as Instagram sends it: zlib over a two-field thrift struct."""
+    w = ThriftCompactWriter()
+    w.write_string(1, topic)
+    w.write_string(2, payload if isinstance(payload, str) else json.dumps(payload))
+    w.write_stop()
+    return zlib.compress(w.getvalue())
+
+
+def _typing_patch(thread_id: str, status: int) -> dict[str, object]:
+    # Shape captured live on 2026-10-04 from the GraphQL direct-typing subscription.
+    value = {
+        "timestamp": 1791137489142127,
+        "sender_id": 4400000001,
+        "ttl": 22000,
+        "activity_status": status,
+        "attribution": None,
+    }
+    return {
+        "event": "patch",
+        "data": [
+            {
+                "op": "add",
+                "path": f"/direct_v2/threads/{thread_id}/activity_indicator_id/ab0c9747",
+                "value": json.dumps(value),
+            }
+        ],
+    }
+
+
+class TestParseRealtimeSubTyping:
+    def test_typing_started_and_stopped(self) -> None:
+        started, seq = parse_payload("149", _realtime_sub("direct", _typing_patch("T7", 1)))
+        stopped, _ = parse_payload("149", _realtime_sub("direct", _typing_patch("T7", 0)))
+
+        assert seq == 0  # realtime subs never move the Iris cursor
+        assert started == [
+            TypingEvent(thread_id="T7", user_id=4400000001, activity_status=1, ttl=22000)
+        ]
+        assert stopped[0].activity_status == 0
+
+    def test_other_sub_topics_are_ignored(self) -> None:
+        events, _ = parse_payload("149", _realtime_sub("app_presence", _typing_patch("T7", 1)))
+        assert events == []
+
+    def test_only_typing_is_taken(self) -> None:
+        """A message patch on 149 is dropped: messages come from Iris, never twice."""
+        message = {
+            "op": "add",
+            "path": "/direct_v2/threads/T7/items/I1",
+            "value": json.dumps({"item_id": "I1", "user_id": 1, "item_type": "text", "text": "hi"}),
+        }
+        patch = _typing_patch("T7", 1)
+        patch["data"] = [message, *patch["data"]]  # type: ignore[misc]
+
+        events, _ = parse_payload("149", _realtime_sub("direct", patch))
+        assert [type(e) for e in events] == [TypingEvent]
+
+    def test_unreadable_wrapper_is_skipped(self) -> None:
+        events, _ = parse_payload("149", zlib.compress(b'{"not": "thrift"}'))
+        assert events == []
 
 
 class TestParseEdgeCases:

@@ -1,8 +1,9 @@
-"""Thrift Compact Protocol encoder for MQTToT CONNECT payloads.
+"""Thrift Compact Protocol for MQTToT: the CONNECT payload and realtime sub messages.
 
 Implements the subset of Thrift Compact Protocol needed to build
-Instagram's MQTT CONNECT client_id payload. Based on the working
-poc at scratch/mqtt_poc/mqtt_listen.py.
+Instagram's MQTT CONNECT client_id payload (based on the working
+poc at scratch/mqtt_poc/mqtt_listen.py) and to read the two-field
+wrapper around /ig_realtime_sub messages.
 """
 
 from __future__ import annotations
@@ -196,3 +197,56 @@ def build_connect_payload(session: dict[str, Any]) -> bytes:
     w.write_stop()
 
     return zlib.compress(w.getvalue(), 9)
+
+
+_BINARY = 8  # Thrift compact type id of string/binary
+
+
+def _read_varint(data: bytes, pos: int) -> tuple[int, int]:
+    value = shift = 0
+    while True:
+        if pos >= len(data):
+            msg = "truncated varint"
+            raise ValueError(msg)
+        byte = data[pos]
+        pos += 1
+        value |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return value, pos
+        shift += 7
+
+
+def read_realtime_sub(data: bytes) -> tuple[str, str]:
+    """Split a decompressed /ig_realtime_sub message into its sub-topic and payload.
+
+    The message is a Thrift compact struct with two binary fields: 1 the
+    sub-topic (e.g. ``direct``) and 2 the JSON payload.
+
+    Raises:
+        ValueError: If the bytes are not that struct.
+    """
+    fields: dict[int, bytes] = {}
+    pos = field_id = 0
+    while True:
+        if pos >= len(data):
+            msg = "realtime sub message has no stop byte"
+            raise ValueError(msg)
+        header = data[pos]
+        pos += 1
+        if header == 0:
+            break
+        delta, field_type = header >> 4, header & 0x0F
+        if delta == 0 or field_type != _BINARY:
+            msg = f"unexpected thrift field header 0x{header:02x}"
+            raise ValueError(msg)
+        field_id += delta
+        length, pos = _read_varint(data, pos)
+        if pos + length > len(data):
+            msg = "truncated realtime sub field"
+            raise ValueError(msg)
+        fields[field_id] = data[pos : pos + length]
+        pos += length
+    if 1 not in fields or 2 not in fields:
+        msg = "realtime sub message lacks its topic or payload"
+        raise ValueError(msg)
+    return fields[1].decode("utf-8", errors="replace"), fields[2].decode("utf-8", errors="replace")

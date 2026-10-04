@@ -1,7 +1,8 @@
 """Parse MQTT payloads into typed Event objects.
 
-Handles topic 146 (/ig_message_sync) Iris patches and topic 88 (/pubsub)
-Skywalker typing indicators.
+Handles topic 146 (/ig_message_sync) Iris patches, topic 149
+(/ig_realtime_sub) typing indicators and topic 88 (/pubsub) Skywalker
+typing indicators.
 """
 
 from __future__ import annotations
@@ -25,7 +26,8 @@ from instagram_mcp.mqtt.events import (
     TypingEvent,
     UnsendEvent,
 )
-from instagram_mcp.mqtt.topics import MESSAGE_SYNC, PUBSUB, TOPIC_NAMES
+from instagram_mcp.mqtt.thrift import read_realtime_sub
+from instagram_mcp.mqtt.topics import MESSAGE_SYNC, PUBSUB, REALTIME_SUB, TOPIC_NAMES
 from instagram_mcp.shares import share_from_item
 
 logger = logging.getLogger("instagram_mcp.mqtt")
@@ -70,12 +72,15 @@ def parse_payload(topic: str, raw_payload: bytes) -> tuple[list[Event], int]:
     topic_name = TOPIC_NAMES.get(topic, topic)
 
     # Only process topics we handle; skip the rest silently.
-    if topic_int not in (MESSAGE_SYNC, PUBSUB):
+    if topic_int not in (MESSAGE_SYNC, PUBSUB, REALTIME_SUB):
         return [], 0
 
     try:
         decompressed = zlib.decompress(raw_payload)
-        text = decompressed.decode("utf-8", errors="replace")
+        if topic_int == REALTIME_SUB:
+            sub_topic, text = read_realtime_sub(decompressed)
+        else:
+            sub_topic, text = "", decompressed.decode("utf-8", errors="replace")
         data = json.loads(text)
     except Exception:
         logger.warning(
@@ -86,6 +91,8 @@ def parse_payload(topic: str, raw_payload: bytes) -> tuple[list[Event], int]:
 
     if topic_int == MESSAGE_SYNC:
         return _parse_iris_payload(data)
+    if topic_int == REALTIME_SUB:
+        return _parse_realtime_sub(sub_topic, data), 0
     return _parse_pubsub_payload(data), 0
 
 
@@ -163,6 +170,21 @@ def _parse_iris_payload(data: Any) -> tuple[list[Event], int]:
                 events.append(parsed)
 
     return events, max_seq_id
+
+
+def _parse_realtime_sub(sub_topic: str, data: Any) -> list[Event]:
+    """Parse topic 149 (/ig_realtime_sub) into typing events.
+
+    The GraphQL direct-typing subscription delivers sub-topic ``direct`` with
+    the Iris patch shape: ``{"event": "patch", "data": [{op, path, value}]}``,
+    path ``/direct_v2/threads/{tid}/activity_indicator_id/{uuid}``. Only typing
+    is taken from here; messages keep coming from Iris, so nothing is reported
+    twice.
+    """
+    if sub_topic != "direct":
+        return []
+    events, _ = _parse_iris_payload(data)
+    return [event for event in events if isinstance(event, TypingEvent)]
 
 
 def _parse_iris_patch(op: str, path: str, value_str: str) -> Event | None:  # noqa: PLR0911
@@ -354,7 +376,7 @@ def _parse_reaction(
 
 
 def _parse_activity_indicator(thread_id: str, value_str: str) -> TypingEvent | None:
-    """Parse a typing indicator from topic 146 activity_indicator path."""
+    """Parse a typing indicator from an activity_indicator_id patch (topic 149 or 146)."""
     try:
         value = json.loads(value_str) if isinstance(value_str, str) else value_str
     except json.JSONDecodeError, TypeError:

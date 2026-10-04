@@ -1,6 +1,8 @@
 """Unit tests for Thrift Compact Protocol encoder."""
 
-from instagram_mcp.mqtt.thrift import ThriftCompactWriter
+import pytest
+
+from instagram_mcp.mqtt.thrift import ThriftCompactWriter, read_realtime_sub
 
 
 class TestThriftCompactWriter:
@@ -234,3 +236,36 @@ class TestBuildConnectPayload:
         result = build_connect_payload(session)
         decompressed = zlib.decompress(result)
         assert b"authorization=Bearer IGT:2:" in decompressed
+
+
+class TestReadRealtimeSub:
+    def test_captured_message(self) -> None:
+        # The wrapper as it came off the wire on 2026-10-04: field 1 "direct",
+        # field 2 a 291-byte JSON patch (two-byte varint length), then STOP.
+        body = b'{"event":"patch","data":[]}'.ljust(291, b" ")
+        data = b"\x18\x06direct\x18\xa3\x02" + body + b"\x00"
+
+        assert read_realtime_sub(data) == ("direct", body.decode())
+
+    def test_round_trip_with_the_writer(self) -> None:
+        w = ThriftCompactWriter()
+        w.write_string(1, "direct")
+        w.write_string(2, "{}")
+        w.write_stop()
+
+        assert read_realtime_sub(w.getvalue()) == ("direct", "{}")
+
+    @pytest.mark.parametrize(
+        ("data", "error"),
+        [
+            (b"\x18\x06direct", "no stop byte"),
+            (b"\x15\x02\x00", "unexpected thrift field header 0x15"),
+            (b"\x08\x02\x00", "unexpected thrift field header 0x08"),
+            (b"\x18\x80", "truncated varint"),
+            (b"\x18\x09dir\x00", "truncated realtime sub field"),
+            (b"\x18\x06direct\x00", "lacks its topic or payload"),
+        ],
+    )
+    def test_malformed(self, data: bytes, error: str) -> None:
+        with pytest.raises(ValueError, match=error):
+            read_realtime_sub(data)
