@@ -1,0 +1,263 @@
+# GENERATED from skoggi-ch infrastructure/platform/release/release.yml by onboard.sh.
+# Do not edit it here: change the source in skoggi-ch and run onboard.sh again.
+# Test, release when the commits call for a version, deploy to nexi. Every push to main
+# deploys; a version (tag + GitHub Release) is cut only for feat, fix, perf, revert or a
+# breaking change. Design: skoggi-ch .claude/knowledge-base/infrastructure/release-pipeline.md
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  # upgrade-deps calls this after its own push: a push made with GITHUB_TOKEN starts no
+  # workflow.
+  workflow_call:
+
+permissions: {}
+
+# bash -eo pipefail (the implicit default is bash -e).
+defaults:
+  run:
+    shell: bash
+
+# One run at a time per repo. A running run is never cancelled; of the runs waiting,
+# GitHub keeps the newest.
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+    permissions:
+      contents: read
+
+  release:
+    needs: test
+    # A dispatch from another branch runs the tests and stops there.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # the tag and the GitHub Release
+    outputs:
+      sha: ${{ steps.release.outputs.sha }}
+      version: ${{ steps.release.outputs.version }}
+      notes: ${{ steps.release.outputs.notes }}
+    steps:
+      # The newest main, not github.sha: upgrade-deps calls this after its own push, and
+      # its github.sha is the commit before that push.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: lts/*
+          package-manager-cache: false
+
+      # This job can push to main, so nothing in it floats: semantic-release and every
+      # dependency at the lockfile's exact versions, checked against its integrity hashes,
+      # no install scripts. The lockfile comes from skoggi-ch (onboard.sh).
+      - name: Install semantic-release
+        working-directory: .github/release
+        env:
+          NPM_CONFIG_UPDATE_NOTIFIER: "false"
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Release
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          # Nothing more is fetched from npm while the token is in reach.
+          NPM_CONFIG_OFFLINE: "true"
+          NPM_CONFIG_UPDATE_NOTIFIER: "false"
+        run: |
+          head=$(git rev-parse HEAD)
+
+          # A push run tested github.sha. If main has moved on since, the newer commit's
+          # own run is queued behind this one and tests it first: deploy what was tested
+          # here and leave the release to that run.
+          if [ "$EVENT_NAME" = push ] && [ "$head" != "$EVENT_SHA" ]; then
+            echo "main moved on to $head; deploying the tested $EVENT_SHA without a release"
+            echo "sha=$EVENT_SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "sha=$head" >> "$GITHUB_OUTPUT"
+
+          # The config lives in .github/release/release.config.cjs (from skoggi-ch);
+          # semantic-release looks for one in the repo root.
+          echo 'module.exports = require("./.github/release/release.config.cjs");' > .releaserc.cjs
+
+          before=$(git tag --points-at HEAD --list 'v*' | sort)
+          .github/release/node_modules/.bin/semantic-release
+          after=$(git tag --points-at HEAD --list 'v*' | sort)
+
+          tag=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$after") \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+' || true)
+          if [ -z "$tag" ]; then
+            echo "No release: no commit since the last tag calls for one."
+            exit 0
+          fi
+          if [ "$(wc -l <<<"$tag")" -ne 1 ]; then
+            echo "::error::More than one new tag on HEAD: $tag"
+            exit 1
+          fi
+
+          notes=$(gh release view "$tag" -R "$GITHUB_REPOSITORY" --json body --jq .body)
+          delim="NOTES_$(openssl rand -hex 16)"
+          {
+            echo "version=${tag#v}"
+            echo "notes<<$delim"
+            printf '%s\n' "$notes"
+            echo "$delim"
+          } >> "$GITHUB_OUTPUT"
+          echo "Released [$tag]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$tag)" \
+            >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      id-token: write # the OIDC token the deployer verifies
+    # The changelog slug is the manifest name, which the deployer reports (it picks the
+    # service from the token's claims); the site's index until it has answered.
+    environment:
+      name: nexi
+      url: https://changelog.skoggi.ch/${{ steps.deploy.outputs.service && format('{0}/', steps.deploy.outputs.service) || '' }}
+    steps:
+      - name: Deploy to nexi
+        id: deploy
+        env:
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+          SHA: ${{ needs.release.outputs.sha }}
+          VERSION: ${{ needs.release.outputs.version }}
+          NOTES: ${{ needs.release.outputs.notes }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          api=https://deploy.skoggi.ch
+          if [ -z "$CF_ACCESS_CLIENT_ID" ] || [ -z "$CF_ACCESS_CLIENT_SECRET" ]; then
+            echo "::error::CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET are not set for nexi"
+            exit 1
+          fi
+
+          umask 077
+          token_req="$RUNNER_TEMP/oidc-request.hdr"
+          hdr="$RUNNER_TEMP/deploy.hdr"
+          body="$RUNNER_TEMP/deploy-body.json"
+          resp="$RUNNER_TEMP/deploy-response.json"
+          trap 'rm -f "$token_req" "$hdr"' EXIT
+          printf 'Authorization: bearer %s\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" > "$token_req"
+
+          # A fresh OIDC token for every request: each one lives 5 minutes and the
+          # deployer accepts it once. Headers go through a file, never argv or the log.
+          new_headers() {
+            local token
+            token=$(curl -sSf --max-time 30 -H @"$token_req" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=https%3A%2F%2Fdeploy.skoggi.ch" \
+              | jq -r .value)
+            if [ -z "$token" ] || [ "$token" = null ]; then
+              echo "::error::No OIDC token from GitHub"
+              return 1
+            fi
+            echo "::add-mask::$token"
+            {
+              printf 'Authorization: Bearer %s\n' "$token"
+              printf 'CF-Access-Client-Id: %s\n' "$CF_ACCESS_CLIENT_ID"
+              printf 'CF-Access-Client-Secret: %s\n' "$CF_ACCESS_CLIENT_SECRET"
+            } > "$hdr"
+          }
+
+          print_log_tail() {
+            jq -r 'if (.log_tail | type) == "array" then .log_tail[] else (.log_tail // "") end' \
+              "$resp" || true
+          }
+
+          jq -n '{
+            sha: env.SHA,
+            version: (env.VERSION | if . == "" then null else . end),
+            notes: (env.NOTES | if . == "" then null else . end),
+            run_url: env.RUN_URL
+          }' > "$body"
+
+          # Retried only when the request may not have arrived (no answer, 5xx).
+          for attempt in 1 2 3; do
+            new_headers
+            code=$(curl -sS --max-time 30 -o "$resp" -w '%{http_code}' -X POST \
+              -H @"$hdr" -H 'Content-Type: application/json' --data-binary @"$body" \
+              "$api/v1/deploy") || code=000
+            [ "$code" = 202 ] && break
+            echo "POST /v1/deploy: HTTP $code (attempt $attempt)"
+            case $code in
+              000 | 5??) sleep 5 ;;
+              *) cat "$resp" || true; exit 1 ;;
+            esac
+          done
+          if [ "$code" != 202 ]; then
+            echo "::error::The deployer did not accept the deploy"
+            exit 1
+          fi
+
+          id=$(jq -r .id "$resp")
+          if ! [[ $id =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+            echo "::error::Unexpected deploy id in the deployer's answer"
+            exit 1
+          fi
+          echo "Deploy $id queued for ${SHA:0:12}${VERSION:+ (v$VERSION)}"
+
+          deadline=$((SECONDS + 1200))
+          errors=0
+          last=""
+          service=""
+          while :; do
+            sleep 5
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::error::Deploy $id did not finish within 20 minutes (last status: ${last:-none})"
+              exit 1
+            fi
+            new_headers
+            code=$(curl -sS --max-time 30 -o "$resp" -w '%{http_code}' -H @"$hdr" \
+              "$api/v1/deploys/$id") || code=000
+            if [ "$code" != 200 ]; then
+              errors=$((errors + 1))
+              echo "GET /v1/deploys/$id: HTTP $code ($errors in a row)"
+              if [ "$errors" -ge 12 ]; then
+                echo "::error::The deployer stopped answering"
+                exit 1
+              fi
+              continue
+            fi
+            errors=0
+            if [ -z "$service" ]; then
+              service=$(jq -r '.service // empty' "$resp")
+              if [[ $service =~ ^[a-z0-9-]+$ ]]; then
+                echo "service=$service" >> "$GITHUB_OUTPUT"
+              else
+                service=""
+              fi
+            fi
+            status=$(jq -r .status "$resp")
+            if [ "$status" != "$last" ]; then
+              echo "status: $status"
+              last=$status
+            fi
+            case $status in
+              queued | running) ;;
+              succeeded) break ;;
+              *)
+                echo "::error::Deploy $id $status"
+                print_log_tail
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "Deployed \`${SHA:0:12}\`${VERSION:+ as v$VERSION} to nexi (deploy $id)" \
+            >> "$GITHUB_STEP_SUMMARY"

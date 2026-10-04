@@ -1,0 +1,11 @@
+{
+  "name": "release-pipeline",
+  "private": true,
+  "description": "semantic-release for the release pipeline (and its two plugins the history backfill calls), at exact versions. Source: skoggi-ch infrastructure/platform/release/, copied into each repo's .github/release/ by onboard.sh; edit it there.",
+  "dependencies": {
+    "@semantic-release/commit-analyzer": "13.0.1",
+    "@semantic-release/release-notes-generator": "14.1.1",
+    "conventional-changelog-conventionalcommits": "9.3.1",
+    "semantic-release": "25.0.9"
+  }
+}
