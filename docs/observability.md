@@ -49,7 +49,9 @@ Prometheus 3 names: dots become underscores, unit `s` adds `_seconds`, counters 
 | `dm.bridge.queue.depth` | gauge `{item}` | platform, queue |
 | `http.server.request.duration` | histogram `s` (semconv) | http.request.method, http.route, http.response.status_code, error.type |
 
-- `event` (MQTT): `connected disconnected reconnect connect_failed stream_error`.
+- `event` (MQTT): `connected disconnected reconnect connect_failed stream_error iris_refused`
+  (Instagram refused the Iris subscription, so the bridge closed and resubscribes with a
+  fresh inbox snapshot).
 - `type`: `message reaction read typing unsent thread`, plus `other` on the freshness gauge.
   `reason`: `slow_subscriber`. `queue`: `media` (events held for their download),
   `sse_backlog`, `event_log` (frames kept for replay).

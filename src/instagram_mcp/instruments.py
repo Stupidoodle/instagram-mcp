@@ -165,7 +165,7 @@ connection_events = meter.create_counter(
     "dm.bridge.connection.events",
     unit="{event}",
     description="MQTT connection events: connected, disconnected, reconnect, "
-    "connect_failed, stream_error.",
+    "connect_failed, stream_error, iris_refused.",
 )
 
 

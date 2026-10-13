@@ -202,6 +202,7 @@ class Gateway:
                 seq_id=iris["seq_id"],
                 snapshot_at_ms=iris["snapshot_at_ms"],
                 app_version=iris["app_version"],
+                iris_state=self.client.get_iris_info,
             )
             logger.info("Instagram gateway connected", extra={"seq_id": iris["seq_id"]})
         except Exception:

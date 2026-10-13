@@ -12,6 +12,7 @@ from instagram_mcp.mqtt.events import (
     UnsendEvent,
 )
 from instagram_mcp.mqtt.parser import (
+    parse_iris_sub_response,
     parse_payload,
     parse_publish_packet,
 )
@@ -1193,3 +1194,19 @@ class TestParseEdgeCases:
         # generic ThreadEvent.
         assert len(events) == 1
         assert isinstance(events[0], ThreadEvent)
+
+
+class TestParseIrisSubResponse:
+    def test_compressed_refusal(self) -> None:
+        body = {"succeeded": False, "error_type": 1, "error_message": "snapshot too old"}
+        assert parse_iris_sub_response(zlib.compress(json.dumps(body).encode())) == body
+
+    def test_uncompressed_acceptance(self) -> None:
+        assert parse_iris_sub_response(b'{"succeeded": true, "seq_id": 7}') == {
+            "succeeded": True,
+            "seq_id": 7,
+        }
+
+    def test_no_json_object(self) -> None:
+        assert parse_iris_sub_response(b"\xff\xfe not json") is None
+        assert parse_iris_sub_response(zlib.compress(b"[1, 2]")) is None

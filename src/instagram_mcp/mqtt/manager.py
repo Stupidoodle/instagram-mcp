@@ -20,12 +20,17 @@ from instagrapi import config as ig_config
 
 from instagram_mcp import instruments
 from instagram_mcp.mqtt.connection import PINGREQ, PINGRESP, PUBACK, PUBLISH, MQTToTConnection
-from instagram_mcp.mqtt.parser import parse_payload, parse_publish_packet
+from instagram_mcp.mqtt.parser import (
+    parse_iris_sub_response,
+    parse_payload,
+    parse_publish_packet,
+)
 from instagram_mcp.mqtt.thrift import build_connect_payload
 from instagram_mcp.mqtt.topics import (
     REALTIME_SUB,
     SEND_MESSAGE,
     SUB_IRIS,
+    SUB_IRIS_RESPONSE,
     direct_typing_subscription,
 )
 
@@ -65,6 +70,16 @@ _STALE_TIMEOUT = 90
 # How often the watchdog checks the connection and reconnects a dead one.
 _WATCHDOG_INTERVAL = 10
 
+# Instagram refuses an Iris subscription whose inbox snapshot is about a week old
+# (seen 2026-10-12, 7 days after the bridge started), and then sends no DM events at
+# all. A reconnect takes a fresh snapshot from the inbox once the stored one is a day old.
+_IRIS_SNAPSHOT_MAX_AGE_S = 24 * 3600
+
+# After Instagram refuses an Iris subscription, the first reconnect (with a fresh
+# snapshot) is immediate; each further refusal in a row doubles the wait, up to the cap.
+_IRIS_REFUSED_BACKOFF_S = 60
+_IRIS_REFUSED_BACKOFF_MAX_S = 900
+
 
 class MQTTManager:
     """Manages the persistent MQTT connection and event delivery.
@@ -94,6 +109,11 @@ class MQTTManager:
         self._seq_id: int = 0
         self._snapshot_at_ms: int = 0
         self._app_version: str = ig_config.DEFAULT_APP_VERSION
+        self._iris_state: Callable[[], dict[str, Any]] | None = None
+
+        # Iris subscriptions Instagram refused in a row, and when it last did
+        self._iris_refusals: int = 0
+        self._iris_refused_at: float = 0.0
 
     @property
     def is_connected(self) -> bool:
@@ -197,6 +217,7 @@ class MQTTManager:
         seq_id: int,
         snapshot_at_ms: int = 0,
         app_version: str = ig_config.DEFAULT_APP_VERSION,
+        iris_state: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         """Connect to Instagram MQTT and start the reader thread.
 
@@ -205,6 +226,10 @@ class MQTTManager:
             seq_id: Iris sequence ID from direct_v2/inbox/ REST API.
             snapshot_at_ms: Snapshot timestamp from direct_v2/inbox/.
             app_version: Instagram app version for the subscription.
+            iris_state: Fetches a fresh seq_id, snapshot_at_ms and app_version
+                (``InstagramClient.get_iris_info``). Reconnects call it when the stored
+                snapshot is old or Instagram refused it; without it they reuse the
+                stored values.
 
         Raises:
             FileNotFoundError: If session file doesn't exist.
@@ -215,6 +240,7 @@ class MQTTManager:
         self._seq_id = seq_id
         self._snapshot_at_ms = snapshot_at_ms
         self._app_version = app_version
+        self._iris_state = iris_state
 
         try:
             self._do_connect(session_file, seq_id, snapshot_at_ms, app_version)
@@ -283,6 +309,10 @@ class MQTTManager:
             if self.is_connected:
                 return True
 
+            # Instagram refused the subscription again: wait before asking once more
+            if time.monotonic() - self._iris_refused_at < self._iris_backoff():
+                return False
+
             logger.warning("MQTT connection dead, attempting reconnect...")
 
             # Tear down old connection
@@ -291,6 +321,9 @@ class MQTTManager:
             if self._reader_thread and self._reader_thread.is_alive():
                 self._reader_thread.join(timeout=3)
             self._reader_thread = None
+
+            if self._iris_refusals or self._iris_snapshot_is_old():
+                self._refresh_iris_state()
 
             try:
                 self._do_connect(
@@ -309,6 +342,72 @@ class MQTTManager:
                 logger.exception("MQTT reconnect failed")
                 instruments.connection_event("connect_failed")
                 return False
+
+    def _iris_backoff(self) -> float:
+        """Seconds to wait after the last Iris refusal: none after the first."""
+        if self._iris_refusals < 2:
+            return 0.0
+        wait: float = _IRIS_REFUSED_BACKOFF_S * 2.0 ** (self._iris_refusals - 2)
+        return min(wait, _IRIS_REFUSED_BACKOFF_MAX_S)
+
+    def _iris_snapshot_is_old(self) -> bool:
+        """Whether the stored inbox snapshot is missing or older than a day."""
+        age_ms = time.time() * 1000 - self._snapshot_at_ms
+        return self._snapshot_at_ms <= 0 or age_ms > _IRIS_SNAPSHOT_MAX_AGE_S * 1000
+
+    def _refresh_iris_state(self) -> None:
+        """Take a fresh seq_id and snapshot from the inbox; keep the stored ones on failure."""
+        if self._iris_state is None:
+            return
+        try:
+            state = self._iris_state()
+            self._seq_id = int(state["seq_id"])
+            self._snapshot_at_ms = int(state["snapshot_at_ms"])
+            self._app_version = str(state.get("app_version") or self._app_version)
+        except Exception:
+            logger.warning(
+                "Could not refresh the Iris state; reconnecting with the stored one",
+                exc_info=True,
+            )
+            return
+        logger.info(
+            "Iris state refreshed",
+            extra={"seq_id": self._seq_id, "snapshot_at_ms": self._snapshot_at_ms},
+        )
+
+    def _on_iris_response(self, payload: bytes) -> None:
+        """Act on Instagram's answer to the Iris subscribe.
+
+        A refused subscription leaves the socket up but silent, so it is closed: the
+        watchdog then reconnects with a fresh snapshot.
+        """
+        response = parse_iris_sub_response(payload)
+        if response is None:
+            logger.warning(
+                "Could not parse the Iris subscribe response", extra={"bytes": len(payload)}
+            )
+            return
+        if response.get("succeeded") is False:
+            self._iris_refusals += 1
+            self._iris_refused_at = time.monotonic()
+            logger.warning(
+                "Instagram refused the Iris subscription, closing to resubscribe",
+                extra={
+                    "error_type": response.get("error_type"),
+                    "error_message": response.get("error_message"),
+                    "refusals": self._iris_refusals,
+                },
+            )
+            instruments.connection_event("iris_refused")
+            self._conn.disconnect()
+            return
+        if "succeeded" not in response:
+            logger.info(
+                "Iris subscribe response without a verdict", extra={"keys": sorted(response)}
+            )
+            return
+        self._iris_refusals = 0
+        logger.info("Iris subscription accepted", extra={"seq_id": response.get("seq_id")})
 
     def disconnect(self) -> None:
         """Stop the watchdog and reader threads and disconnect."""
@@ -422,6 +521,10 @@ class MQTTManager:
 
         if packet_id is not None:
             self._conn.send_puback(packet_id)
+
+        if topic == str(SUB_IRIS_RESPONSE):
+            self._on_iris_response(payload)
+            return
 
         events, seq_id = parse_payload(topic, payload)
 

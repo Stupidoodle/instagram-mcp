@@ -22,7 +22,14 @@ EVENTS = "dm.bridge.connection.events"
 
 
 def _counts(telemetry: Telemetry) -> Callable[[], dict[str, float]]:
-    names = ("connected", "disconnected", "reconnect", "connect_failed", "stream_error")
+    names = (
+        "connected",
+        "disconnected",
+        "reconnect",
+        "connect_failed",
+        "stream_error",
+        "iris_refused",
+    )
     before = {e: telemetry.total(EVENTS, event=e, platform="instagram") for e in names}
 
     def delta() -> dict[str, float]:
