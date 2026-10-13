@@ -57,6 +57,26 @@ def parse_publish_packet(first_byte: int, body: bytes) -> tuple[str, int | None,
     return topic, packet_id, body[payload_start:]
 
 
+def parse_iris_sub_response(raw_payload: bytes) -> dict[str, Any] | None:
+    """Parse Instagram's answer to an Iris subscribe (topic 135, /ig_sub_iris_response).
+
+    A JSON object, zlib-compressed like the other topics: ``succeeded`` says whether
+    Instagram took the subscription, ``error_type`` and ``error_message`` why not.
+
+    Returns:
+        The object, or None when the payload is no JSON object.
+    """
+    try:
+        text = zlib.decompress(raw_payload)
+    except zlib.error:
+        text = raw_payload
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def parse_payload(topic: str, raw_payload: bytes) -> tuple[list[Event], int]:
     """Parse a raw MQTT payload into typed Event objects.
 

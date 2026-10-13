@@ -797,3 +797,145 @@ class TestMQTTManagerListenerFailure:
         mgr = MQTTManager()
         mgr._conn = MagicMock()
         mgr._handle_publish(*_publish_body("x"))
+
+
+def _iris_response(body: dict[str, object]) -> tuple[int, bytes]:
+    """A QoS 1 PUBLISH on /ig_sub_iris_response (topic 135) carrying `body`."""
+    topic = b"135"
+    payload = zlib.compress(json.dumps(body).encode())
+    return 0x32, struct.pack("!H", len(topic)) + topic + struct.pack("!H", 1) + payload
+
+
+def _fresh_snapshot_ms() -> int:
+    return int(time.time() * 1000)
+
+
+class TestMQTTManagerIris:
+    def test_a_refused_subscription_closes_the_socket(self, telemetry: Telemetry) -> None:
+        mgr = MQTTManager()
+        mgr._conn = MagicMock()
+        listener = MagicMock()
+        mgr.set_listener(listener)
+        mgr._handle_publish(
+            *_iris_response({"succeeded": False, "error_type": 1, "error_message": "too old"})
+        )
+        mgr._conn.disconnect.assert_called_once()
+        assert mgr._iris_refusals == 1
+        assert telemetry.total("dm.bridge.connection.events", event="iris_refused") == 1
+        listener.assert_not_called()
+
+    def test_an_accepted_subscription_clears_the_refusals(self) -> None:
+        mgr = MQTTManager()
+        mgr._conn = MagicMock()
+        mgr._iris_refusals = 3
+        mgr._handle_publish(*_iris_response({"succeeded": True, "seq_id": 9}))
+        assert mgr._iris_refusals == 0
+        mgr._conn.disconnect.assert_not_called()
+
+    @pytest.mark.parametrize("body", [{"seq_id": 9}, None], ids=["no verdict", "no json"])
+    def test_an_unclear_response_changes_nothing(self, body: dict[str, object] | None) -> None:
+        mgr = MQTTManager()
+        mgr._conn = MagicMock()
+        mgr._iris_refusals = 1
+        if body is None:
+            topic = b"135"
+            mgr._handle_publish(0x30, struct.pack("!H", len(topic)) + topic + b"\xff garbage")
+        else:
+            mgr._handle_publish(*_iris_response(body))
+        assert mgr._iris_refusals == 1
+        mgr._conn.disconnect.assert_not_called()
+
+    def _reconnectable(self, tmp_path: Path, **state: object) -> MQTTManager:
+        mgr = MQTTManager()
+        mgr._conn = MagicMock(is_connected=False)
+        mgr._session_file = tmp_path / "session.json"
+        mgr._seq_id = 100
+        mgr._snapshot_at_ms = _fresh_snapshot_ms()
+        for name, value in state.items():
+            setattr(mgr, name, value)
+        return mgr
+
+    def _reconnect(self, mgr: MQTTManager) -> tuple[bool, MagicMock]:
+        with (
+            patch.object(mgr, "_do_connect") as do_connect,
+            patch("instagram_mcp.mqtt.manager.time.sleep"),
+        ):
+            return mgr.ensure_connected(), do_connect
+
+    def test_a_reconnect_keeps_a_fresh_snapshot(self, tmp_path: Path) -> None:
+        provider = MagicMock()
+        mgr = self._reconnectable(tmp_path, _iris_state=provider)
+        snapshot = mgr._snapshot_at_ms
+        ok, do_connect = self._reconnect(mgr)
+        assert ok
+        provider.assert_not_called()
+        assert do_connect.call_args.args[1:3] == (100, snapshot)
+
+    def test_a_reconnect_refreshes_a_day_old_snapshot(self, tmp_path: Path) -> None:
+        provider = MagicMock(
+            return_value={"seq_id": 200, "snapshot_at_ms": 2_000, "app_version": "416.0"}
+        )
+        old = _fresh_snapshot_ms() - (24 * 3600 + 60) * 1000
+        mgr = self._reconnectable(tmp_path, _iris_state=provider, _snapshot_at_ms=old)
+        ok, do_connect = self._reconnect(mgr)
+        assert ok
+        provider.assert_called_once()
+        assert do_connect.call_args.args[1:] == (200, 2_000, "416.0")
+
+    def test_a_reconnect_after_a_refusal_refreshes(self, tmp_path: Path) -> None:
+        provider = MagicMock(return_value={"seq_id": 300, "snapshot_at_ms": _fresh_snapshot_ms()})
+        mgr = self._reconnectable(
+            tmp_path, _iris_state=provider, _iris_refusals=1, _iris_refused_at=time.monotonic()
+        )
+        ok, do_connect = self._reconnect(mgr)
+        assert ok
+        provider.assert_called_once()
+        assert do_connect.call_args.args[1] == 300
+
+    def test_a_failed_refresh_reconnects_with_the_stored_state(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        provider = MagicMock(side_effect=RuntimeError("rate limited"))
+        mgr = self._reconnectable(tmp_path, _iris_state=provider, _snapshot_at_ms=0)
+        with caplog.at_level(logging.WARNING, logger="instagram_mcp.mqtt"):
+            ok, do_connect = self._reconnect(mgr)
+        assert ok
+        assert do_connect.call_args.args[1:3] == (100, 0)
+        assert "Could not refresh the Iris state" in caplog.text
+
+    def test_without_a_provider_the_stored_state_is_reused(self, tmp_path: Path) -> None:
+        mgr = self._reconnectable(tmp_path, _snapshot_at_ms=1)
+        ok, do_connect = self._reconnect(mgr)
+        assert ok
+        assert do_connect.call_args.args[1:3] == (100, 1)
+
+    def test_repeated_refusals_back_off(self, tmp_path: Path) -> None:
+        mgr = self._reconnectable(tmp_path, _iris_refusals=2, _iris_refused_at=time.monotonic())
+        ok, do_connect = self._reconnect(mgr)
+        assert not ok
+        do_connect.assert_not_called()
+        mgr._iris_refused_at = time.monotonic() - 61
+        ok, do_connect = self._reconnect(mgr)
+        assert ok
+        do_connect.assert_called_once()
+
+    @pytest.mark.parametrize(
+        ("refusals", "wait"), [(0, 0), (1, 0), (2, 60), (3, 120), (6, 900), (20, 900)]
+    )
+    def test_the_backoff(self, refusals: int, wait: float) -> None:
+        mgr = MQTTManager()
+        mgr._iris_refusals = refusals
+        assert mgr._iris_backoff() == wait
+
+    @patch.object(MQTTManager, "_publish")
+    @patch("instagram_mcp.mqtt.manager.build_connect_payload", return_value=b"x")
+    def test_connect_stores_the_provider(
+        self, _mock_build: MagicMock, _mock_publish: MagicMock, tmp_path: Path
+    ) -> None:
+        mgr = MQTTManager()
+        mgr._conn = MagicMock(is_connected=True)
+        mgr._conn.read_packet.return_value = None
+        provider = MagicMock()
+        mgr.connect(_make_session_file(tmp_path), seq_id=1, iris_state=provider)
+        assert mgr._iris_state is provider
+        mgr.disconnect()
