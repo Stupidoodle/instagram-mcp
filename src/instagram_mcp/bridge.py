@@ -386,7 +386,7 @@ class Gateway:
 
     async def _transcribe(self, path: Path) -> str:
         url = httpx2.URL(self.settings.instagram_transcriber_url.rstrip("/") + "/transcribe")
-        attributes = {
+        attributes: dict[str, str | int] = {
             "http.request.method": "POST",
             "server.address": url.host,
             "server.port": url.port or 80,
