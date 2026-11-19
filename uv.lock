@@ -599,7 +599,7 @@ dev = [
 
 [[package]]
 name = "instagrapi"
-version = "3.2.17"
+version = "3.2.19"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "curl-cffi" },
@@ -609,9 +609,9 @@ dependencies = [
     { name = "pysocks" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1d/13/bab39ca2ee974d6cb7263c70ca82f75ec1f28d129526bf74ace3053c1399/instagrapi-3.2.17.tar.gz", hash = "sha256:58602c33f82848b54aecdca2d0ec3cc3542d45266d33347f2ad0591d463e73c6", size = 262165, upload-time = "2026-11-18T11:59:31.925Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/20/86/7a89ccd6633e4490c08d2350da228ae7ecbf4c601d462d4d4f2cdf961343/instagrapi-3.2.19.tar.gz", hash = "sha256:0bc52f40c1b8dba820dadf01270d46c89dc9c3ca21368077981b362e8b0ca926", size = 263219, upload-time = "2026-11-19T10:28:07.272Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/2c/0431a71239f525c9104484afa3608cda7e7f61136be0fad28b8fb406ba6b/instagrapi-3.2.17-py3-none-any.whl", hash = "sha256:6610d376a6a714222b66a9eefeec524c18f1204707e154b718a5708cac100027", size = 283667, upload-time = "2026-11-18T11:59:29.912Z" },
+    { url = "https://files.pythonhosted.org/packages/a5/34/1498c465ee23c76b93c5562ba703d0cfcfcbfe73e3cb870a39f4a94f662f/instagrapi-3.2.19-py3-none-any.whl", hash = "sha256:da20b92f4d268806619668b4f5a66121bf5a2a253c6fe590624ae01667cd068b", size = 284782, upload-time = "2026-11-19T10:28:05.521Z" },
 ]
 
 [[package]]
