@@ -599,7 +599,7 @@ dev = [
 
 [[package]]
 name = "instagrapi"
-version = "3.2.20"
+version = "3.2.22"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "curl-cffi" },
@@ -609,9 +609,9 @@ dependencies = [
     { name = "pysocks" },
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a9/aa/37bced39f53928cdcc8afbd0dc27cc4b6ca00f4ca4e565782cbfce6b909e/instagrapi-3.2.20.tar.gz", hash = "sha256:eedf0e3cc8f2824ee003a671abae4e3b99aa91650212fc561b280e9e7b6f52a0", size = 263566, upload-time = "2026-11-24T19:40:01.954Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/59/1f4c5b6f062efcbc3db1c1c1120414ae601fc667307f0ff6404f258c6946/instagrapi-3.2.22.tar.gz", hash = "sha256:a77f215edc7c51fd26012130e2c7c13e5ba256586ee9c589f62e9ecaf9b98bbb", size = 264020, upload-time = "2026-11-26T08:56:52.878Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/33/7d52d76bbcbae96222eb5b3c7b4dd2e4964013403f0ce3cfbc0ca7f5749d/instagrapi-3.2.20-py3-none-any.whl", hash = "sha256:9271feedd5b8f786cf5f4990f9362aeca00ae18830f7a87e82ba371664138a58", size = 285114, upload-time = "2026-11-24T19:40:00.011Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/c8/3d2a4040055d435d288f73d42840ae68945cf2817e32d673439533933a83/instagrapi-3.2.22-py3-none-any.whl", hash = "sha256:5fc3f70efd3780be4ab1e5b46e7f049ff27febd547de2ed1a556aa8ae52514c5", size = 285563, upload-time = "2026-11-26T08:56:51.328Z" },
 ]
 
 [[package]]
@@ -1420,7 +1420,7 @@ wheels = [
 
 [[package]]
 name = "typer"
-version = "0.29.2"
+version = "0.29.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "annotated-doc" },
@@ -1429,9 +1429,9 @@ dependencies = [
     { name = "rich" },
     { name = "shellingham" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/bf/21/37383ece7d0a4995fb8ea97729207c4292b3ff94085002f37b2387063cfb/typer-0.29.2.tar.gz", hash = "sha256:b1998dc5f2c3dedafa1517a9521fa944cc4dc1fadcea085d81a3b10ebcaeb075", size = 205728, upload-time = "2026-11-18T11:09:46.189Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f4/8f/4583099c74623e04610d9df01ff58a9217935e88fdbd4b14167ebe99c134/typer-0.29.3.tar.gz", hash = "sha256:8189a53bb9684dc551e0b61e71904b323214884f2eb14bfe71aa859ae980d10a", size = 205982, upload-time = "2026-11-26T08:20:50.693Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/f3/864dcb0e165b52e9f75aa3c7e0aeeb9876f139c66eb14d87856bb173b0fa/typer-0.29.2-py3-none-any.whl", hash = "sha256:f30731f8ca758368b836b3714872e58e395cef8fcaff918c853b1969ed5274e7", size = 121041, upload-time = "2026-11-18T11:09:45.03Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/43/a3e7ce867dc4fa852f4223ada99d29bc9ba5faf32496b63ec587cd10a0d7/typer-0.29.3-py3-none-any.whl", hash = "sha256:1fd37275046faecc86caa2e0e313978c10db71533fc0fe1a48f4e03a60efc23c", size = 121082, upload-time = "2026-11-26T08:20:49.527Z" },
 ]
 
 [[package]]
